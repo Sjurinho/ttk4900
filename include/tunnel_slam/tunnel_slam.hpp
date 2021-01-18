@@ -11,7 +11,7 @@ class TunnelSlam
 {
     public:
         TunnelSlam(ros::NodeHandle &nh, ros::NodeHandle &pnh); //constructor method
-        ~TunnelSlam(); // distructor method
+        ~TunnelSlam(); // destructor method
         void runOnce(); // runOnce method to control the flow of program
         void pointCloud2Handler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
     private:
