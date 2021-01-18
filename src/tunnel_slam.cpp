@@ -11,10 +11,10 @@ TunnelSlam::TunnelSlam(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     subPointCloud2 = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 1, &TunnelSlam::pointCloud2Handler, this);
 }
 
-// Distructor method
+// Destructor method
 TunnelSlam::~TunnelSlam()
 {
-    std::cout<<"from Distructor \n";
+    std::cout<<"from Destructor \n";
     // Free up the memory assigned from heap
 }
 

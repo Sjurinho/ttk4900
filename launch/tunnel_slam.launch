@@ -7,4 +7,5 @@
         <!-- loading the parameters from yaml file during th runtime -->
         <rosparam command="load" file="$(find tunnel_slam)/config/tunnel_slam.yaml"/>
     </node>
+    <node name="feature_association_node" pkg="tunnel_slam" type="feature_association_node" output="screen" />
 </launch>

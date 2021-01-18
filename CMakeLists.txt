@@ -31,9 +31,14 @@ add_definitions(${PCL_DEFINITIONS})
 
 # Adding the executable files for the build
 add_executable(${PROJECT_NAME}_node src/tunnel_slam.cpp src/tunnel_slam_node.cpp)
+add_executable(feature_association_node src/feature_association.cpp src/feature_association_node.cpp)
 
 # linking the libraries for successful binary genertion
 target_link_libraries(${PROJECT_NAME}_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+target_link_libraries(feature_association_node
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
 )
