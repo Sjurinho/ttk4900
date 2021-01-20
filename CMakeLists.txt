@@ -6,7 +6,7 @@ project(tunnel_slam)
 add_compile_options(-std=c++11)
 
 # Finding the packages required (dependencies for this package)
-find_package(PCL REQUIRED)
+find_package(PCL 1.8 REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
@@ -18,7 +18,7 @@ catkin_package(
   INCLUDE_DIRS include/tunnel_slam
   CATKIN_DEPENDS roscpp rospy std_msgs
 )
-
+#message(STATUS "${PCL_INCLUDE_DIRS}=${${PCL_INCLUDE_DIRS}}")
 # Add the given directories to those the compiler uses to search for include files. 
 # So nothing but giving the location of the include files
 include_directories(
@@ -26,6 +26,8 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${PCL_INLCUDE_DIRS}
 )
+
+link_directories(${PCL_LIBRARY_DIRS})
 
 add_definitions(${PCL_DEFINITIONS})
 
@@ -35,10 +37,10 @@ add_executable(feature_association_node src/feature_association.cpp src/feature_
 
 # linking the libraries for successful binary genertion
 target_link_libraries(${PROJECT_NAME}_node
-  ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
+  ${catkin_LIBRARIES}
 )
 target_link_libraries(feature_association_node
-  ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
+  ${catkin_LIBRARIES}
 )
