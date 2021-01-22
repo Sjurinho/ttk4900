@@ -25,5 +25,4 @@ void TunnelSlam::runOnce()
 
 void TunnelSlam::pointCloud2Handler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 {
-    std::cout << "fromCallback \n";
 }
