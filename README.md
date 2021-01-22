@@ -16,9 +16,16 @@ sudo make install -j8
 sudo apt install libpcl-dev
 ```
 
-Notes to self:
-Symbolic links for packages like pcl and eigen, whose folders are shells to avoid nameconflicts. For example, when installing eigen3 through "sudo install libeigen3-dev"
+### Dynamic links I needed to make:
+Symbolic links for packages like pcl and eigen, whose folders are shells to avoid nameconflicts. For example, when installing eigen3 through "sudo apt install libeigen3-dev"
 ```
 cd /path/to/include/eigen3folder
 sudo ln -sf eigen3/Eigen Eigen
+```
+
+The links i used was
+```
+eigen3/Eigen -> Eigen
+pcl-1.8/pcl -> pcl
+eigen3/unsupported -> unsupported
 ```
