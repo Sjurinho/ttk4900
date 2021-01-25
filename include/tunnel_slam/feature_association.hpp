@@ -8,6 +8,7 @@
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/range_image/range_image.h>
+#include <tf/transform_broadcaster.h>
 
 class FeatureAssociation
 {
@@ -21,12 +22,18 @@ class FeatureAssociation
         ros::Subscriber subPointCloud2;
         ros::Publisher pubFeatureCloud2;
         ros::Publisher pubGroundPlaneCloud2;
+        ros::Publisher pubOdometry;
+        tf::TransformBroadcaster odomBroadcaster;
 
         // Previous point clouds
         pcl::PointCloud<pcl::PointXYZ> _prevFeatureCloud = pcl::PointCloud<pcl::PointXYZ>();
         pcl::PointCloud<pcl::FPFHSignature33> _prevFeatureDescriptor = pcl::PointCloud<pcl::FPFHSignature33>();
         pcl::PointCloud<pcl::Normal> _prevNormals = pcl::PointCloud<pcl::Normal>();
         pcl::PointCloud<pcl::PointXYZ> _prevGroundPlaneCloud = pcl::PointCloud<pcl::PointXYZ>();
+
+        //Transformation
+        Eigen::Affine3d transformation;
+        ros::Time currentTime, prevTime;
 
         pcl::RangeImage _pointCloud2RangeImage(const pcl::PointCloud<pcl::PointXYZ> &cloud);
 
@@ -37,6 +44,8 @@ class FeatureAssociation
 
         //Transformation calculations
         void _calculateTransformation(const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud, const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors);
+
+        void _publishTransformation();
 
 };
 #endif

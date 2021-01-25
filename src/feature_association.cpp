@@ -17,14 +17,23 @@
 #include <pcl/registration/transformation_estimation_lm.h>
 #include <pcl/registration/transformation_estimation_2D.h>
 #include <pcl/registration/gicp.h>
+#include <tf_conversions/tf_eigen.h>
+#include <tf/transform_broadcaster.h>
+#include <tf2_eigen/tf2_eigen.h>
+#include <nav_msgs/Odometry.h>
+
 
 //constructor method
 FeatureAssociation::FeatureAssociation(ros::NodeHandle &nh, ros::NodeHandle &pnh)
-{
+{   
     nh_ = nh;
-    subPointCloud2 = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 32, &FeatureAssociation::pointCloud2Handler, this);
-    pubGroundPlaneCloud2 = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32);
-    pubFeatureCloud2 = nh.advertise<sensor_msgs::PointCloud2>("/featurePointCloud", 32);
+
+    subPointCloud2          = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 32, &FeatureAssociation::pointCloud2Handler, this);
+    pubGroundPlaneCloud2    = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32);
+    pubFeatureCloud2        = nh.advertise<sensor_msgs::PointCloud2>("/featurePointCloud", 32);
+    pubOdometry             = nh.advertise<nav_msgs::Odometry>("/lidarOdom", 32);
+
+    prevTime = ros::Time::now();
 }
 
 // Destructor method
@@ -74,6 +83,8 @@ void FeatureAssociation::pointCloud2Handler(const sensor_msgs::PointCloud2ConstP
         _calculateTransformation(groundPlane, featureCloud, featureDescriptors);
 
         _publish(_prevFeatureCloud, featureCloud);
+        _publishTransformation();
+
 
         _prevFeatureCloud       = featureCloud;
         _prevFeatureDescriptor  = featureDescriptors;
@@ -140,21 +151,23 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
 
 void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &output, pcl::PointCloud<pcl::FPFHSignature33> &descriptors, pcl::PointCloud<pcl::Normal> &normals)
 {      
+    float normalRadius = 0.8;
+    
     //Calculate normals
     pcl::PointCloud<pcl::Normal> fullCloudNormals;
     pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normalEstimator;
     normalEstimator.setInputCloud(cloud.makeShared());
-    normalEstimator.setRadiusSearch(0.4);
+    normalEstimator.setRadiusSearch(normalRadius);
     normalEstimator.compute(fullCloudNormals);
 
     //Extract keypoints
     
     pcl::ISSKeypoint3D<pcl::PointXYZ, pcl::PointXYZ> keypointDetector;
     keypointDetector.setInputCloud(cloud.makeShared());
-    keypointDetector.setSalientRadius(0.6);
-    keypointDetector.setNonMaxRadius(0.6);
-    keypointDetector.setThreshold21(0.3);
-    keypointDetector.setThreshold32(0.3);
+    keypointDetector.setSalientRadius(normalRadius*1.5);
+    keypointDetector.setNonMaxRadius(normalRadius*1.5);
+    keypointDetector.setThreshold21(0.5);
+    keypointDetector.setThreshold32(0.5);
     keypointDetector.setNormals(fullCloudNormals.makeShared());
     keypointDetector.compute(output);
 
@@ -165,7 +178,7 @@ void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &
     fpfhEstimator.setInputCloud(cloud.makeShared());
     fpfhEstimator.setInputNormals(fullCloudNormals.makeShared());
     fpfhEstimator.setSearchMethod(tree);
-    fpfhEstimator.setRadiusSearch(0.5);
+    fpfhEstimator.setRadiusSearch(normalRadius*2);
     fpfhEstimator.compute(fullCloudDescriptors);
 
     //Only extract descriptors from the keypoints
@@ -240,7 +253,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointXYZ> rej;
     rej.setInputSource(_prevFeatureCloud.makeShared());
     rej.setInputTarget(featureCloud.makeShared());
-    rej.setInlierThreshold(1.5);
+    rej.setInlierThreshold(2.5);
     rej.setMaximumIterations(1000);
     rej.setRefineModel(true);
     rej.setInputCorrespondences(allCorrespondences);
@@ -263,8 +276,8 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
 
     tEst.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);*/
     pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ> lm;
-    pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ>::Matrix4 T;
-
+    //pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ>::Matrix4 T;
+    Eigen::Matrix4f T;
     lm.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);
     std::cout<< "Initial transformation\n" << T << std::endl;
 
@@ -276,6 +289,43 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     Eigen::Matrix4f TFinal = gicp.getFinalTransformation();
     
     std::cout << "Final transformation\n" << TFinal << std::endl;*/
+    //TFinal = T;
+    //Eigen::Affine3f t; t = T;
+    transformation = T.cast<double>();
+}
+
+void FeatureAssociation::_publishTransformation()
+{   
+    if (pubOdometry.getNumSubscribers() > 0){
+
+        currentTime = ros::Time::now();
+        double delta_x = transformation.translation().x();
+        double delta_y = transformation.translation().y();
+        double delta_z = transformation.translation().z();
+
+        //tf::Transform tfTransform;
+        //tf::transformEigenToTF(transformation, tfTransform);
+        geometry_msgs::TransformStamped tfMsg   = tf2::eigenToTransform(transformation);
+        tfMsg.header.stamp                      = currentTime;
+        tfMsg.header.frame_id                   = "odom";
+        tfMsg.child_frame_id                    = "base_link";
+
+        odomBroadcaster.sendTransform(tfMsg);
+
+        nav_msgs::Odometry odom;
+        odom.header.stamp       = currentTime;
+        odom.header.frame_id    = "odom";
+        
+        odom.pose.pose.position.x   = delta_x;
+        odom.pose.pose.position.y   = delta_y;
+        odom.pose.pose.position.z   = delta_z;
+        odom.pose.pose.orientation  = tfMsg.transform.rotation;
+
+        odom.child_frame_id = "base_link";
+
+        pubOdometry.publish(odom);
+    }
+    prevTime = currentTime; // should be inside if?
 
 }
 
