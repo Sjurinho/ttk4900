@@ -7,7 +7,7 @@ add_compile_options(-std=c++11)
 
 # Finding the packages required (dependencies for this package)
 find_package(PCL 1.8 REQUIRED)
-find_package(GTSAM)
+find_package(GTSAM REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
