@@ -6,7 +6,7 @@ int main(int argc, char** argv)
     /* initialising the ROS node creating node handle
     for regestring it to the master and then private node handle to
     handle the parameters */
-    ros::init(argc, argv, "feature_association"); 
+    ros::init(argc, argv, "graph"); 
     ros::NodeHandle nh;
     ros::NodeHandle pnh("~"); 
     
@@ -17,6 +17,7 @@ int main(int argc, char** argv)
     /* Looking for any interupt else it will continue looping */
     while (ros::ok())
     {   
+        //ros::spin();
         ros::spinOnce();
         node.runOnce();
         rate.sleep();
