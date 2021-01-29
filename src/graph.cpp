@@ -41,12 +41,13 @@ Graph::~Graph()
 void Graph::_incrementPosition()
 {   
     gtsam::Vector3 rotVec(disp[0], disp[1], disp[2]);
-    gtsam::Point3 trans(disp[3], disp[4], disp[5]);
+    gtsam::Point3 trans(-disp[3], -disp[4], -disp[5]);
     gtsam::Rot3 oriLocal = gtsam::Rot3::RzRyRx(rotVec);
     gtsam::Pose3 localPose(oriLocal, trans);
 
     //localPose.compose(poseInWorld);
     poseInWorld = poseInWorld * localPose;
+    currentPosPoint = pcl::PointXYZ(poseInWorld.translation().x(), poseInWorld.translation().y(), poseInWorld.translation().z());
 }
 
 void Graph::_performIsam()
@@ -111,6 +112,7 @@ void Graph::runOnce()
 
         _incrementPosition();
         _publishTransformed();
+
     }
 }
 
