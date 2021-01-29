@@ -12,14 +12,14 @@ int main(int argc, char** argv)
     
     FeatureAssociation node(nh,pnh); // Creating the object
 
-    //ros::Rate rate(1.0); // Defing the looping rate
+    ros::Rate rate(10); // Defing the looping rate
 
     /* Looking for any interupt else it will continue looping */
     while (ros::ok())
     {   
-        //node.runOnce();
-        ros::spin();
-        //rate.sleep();
+        ros::spinOnce();
+        node.runOnce();
+        rate.sleep();
     }
     return 0;
 }

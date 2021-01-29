@@ -1,22 +1,28 @@
 #include "feature_association.hpp"
-//#include <pcl/point_cloud.h>
+
 #include <pcl/ModelCoefficients.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
 #include <pcl/sample_consensus/method_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
+
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/extract_indices.h>
-#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/voxel_grid.h>
+
 #include <pcl/features/normal_3d.h>
 #include <pcl/keypoints/iss_3d.h>
 #include <pcl/features/fpfh.h>
 #include <pcl/search/kdtree.h>
+
 #include <pcl/registration/correspondence_estimation.h>
 #include <pcl/registration/correspondence_rejection_features.h>
 #include <pcl/registration/correspondence_rejection_sample_consensus.h>
+#include <pcl/registration/correspondence_rejection_trimmed.h>
+#include <pcl/registration/correspondence_rejection_var_trimmed.h>
 #include <pcl/registration/transformation_estimation_lm.h>
 #include <pcl/registration/transformation_estimation_2D.h>
-#include <pcl/registration/gicp.h>
+#include <pcl/registration/transformation_estimation_point_to_plane.h>
+
 #include <tf_conversions/tf_eigen.h>
 #include <tf/transform_broadcaster.h>
 #include <tf2_eigen/tf2_eigen.h>
@@ -27,12 +33,15 @@
 FeatureAssociation::FeatureAssociation(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 {   
     nh_ = nh;
+    ROS_INFO("Initializing Feature Association Node");
 
+    // Subscribers and publishers
     subPointCloud2          = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 32, &FeatureAssociation::pointCloud2Handler, this);
     pubGroundPlaneCloud2    = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32);
     pubFeatureCloud2        = nh.advertise<sensor_msgs::PointCloud2>("/featurePointCloud", 32);
     pubOdometry             = nh.advertise<nav_msgs::Odometry>("/lidarOdom", 32);
 
+    // Variable initialization
     prevTime = ros::Time::now();
 }
 
@@ -44,53 +53,9 @@ FeatureAssociation::~FeatureAssociation()
 
 void FeatureAssociation::pointCloud2Handler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 {   
-    std::cout << "prevclouds.size()\n" << _prevFeatureCloud.empty() << std::endl;
-    std::cout << _prevFeatureDescriptor.empty() << std::endl;
-    std::cout << _prevGroundPlaneCloud.empty() << std::endl;
-
-    pcl::PointCloud<pcl::PointXYZ> rawCloud;
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    std::vector<int> indices;
-    pcl::fromROSMsg(*pointCloud2Msg, rawCloud);
-
-    pcl::removeNaNFromPointCloud(rawCloud, cloud, indices);
-
-    std::cout << "INCLOUD\n" << cloud << std::endl;
-
-    pcl::PointCloud<pcl::PointXYZ> groundPlane;
-    pcl::PointCloud<pcl::PointXYZ> excludedGroundPlane;
-    _findGroundPlane(cloud, groundPlane, excludedGroundPlane);
-    std::cout << "EXCLUDED GROUND PLANE\n" << excludedGroundPlane << std::endl;
-    std::cout << "GROUND PLANE\n" << groundPlane << std::endl;  
-
-    pcl::PointCloud<pcl::PointXYZ> featureCloud;
-    pcl::PointCloud<pcl::FPFHSignature33> featureDescriptors;
-    pcl::PointCloud<pcl::Normal> featureNormals;
-    _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors, featureNormals);
-    std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
-    std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
-
-    if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty() || _prevNormals.empty() ) {
-        std::cout << "INITIALIZING PREVIOUS" << std::endl;
-        _prevFeatureCloud       = featureCloud;
-        _prevFeatureDescriptor  = featureDescriptors;
-        _prevNormals            = featureNormals;
-        _prevGroundPlaneCloud   = groundPlane;
-
-    }
-    else {
-
-        _calculateTransformation(groundPlane, featureCloud, featureDescriptors);
-
-        _publish(_prevFeatureCloud, featureCloud);
-        _publishTransformation();
-
-
-        _prevFeatureCloud       = featureCloud;
-        _prevFeatureDescriptor  = featureDescriptors;
-        _prevNormals            = featureNormals;
-        _prevGroundPlaneCloud   = groundPlane;
-    }
+        pcl::fromROSMsg(*pointCloud2Msg, currentCloud);
+        currentTime = pointCloud2Msg->header.stamp;
+        newCloud=true;
 }
 
 void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &groundPlane, pcl::PointCloud<pcl::PointXYZ> &excludedGroundPlane)
@@ -108,9 +73,6 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
 
     pcl::IndicesConstPtr notGroundPtr = pass.getRemovedIndices();
 
-    //pcl::PointCloud<pcl::PointXYZ> potentialGroundPoints(cloud, *notGroundPtr);
-    // Set up RANSAC MODEL
-
     pcl::SACSegmentation<pcl::PointXYZ> sacGroundPlane;
     sacGroundPlane.setInputCloud(potentialGroundPoints->makeShared());
     sacGroundPlane.setOptimizeCoefficients(true);
@@ -126,32 +88,18 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
     // #TODO: Extract ground plane indices relative to original cloud and output ground plane 
 
     groundPlane = pcl::PointCloud<pcl::PointXYZ>(*potentialGroundPoints, inliers->indices);
-
+    
     pcl::ExtractIndices<pcl::PointXYZ> removeGroundPlaneFilter;
     removeGroundPlaneFilter.setInputCloud(cloud.makeShared());
     removeGroundPlaneFilter.setIndices(notGroundPtr);
     removeGroundPlaneFilter.setNegative(false);
-    removeGroundPlaneFilter.filter(excludedGroundPlane);
-
-    /*pcl::PointIndices::Ptr originalGroundPlaneIndices(new pcl::PointIndices());
-    for (auto it : inliers->indices){
-        originalGroundPlaneIndices->indices.emplace_back((*notGroundPtr)[it]);
-    }
-    //std::cout << "removed indices from original cloud: " << originalGroundPlaneIndices->indices.size() << std::endl;
-
-    pcl::ExtractIndices<pcl::PointXYZ> removeGroundPlaneFilter(true);
-    removeGroundPlaneFilter.setInputCloud(cloud.makeShared());
-    removeGroundPlaneFilter.setIndices(originalGroundPlaneIndices);
-    removeGroundPlaneFilter.setNegative(false);
-    removeGroundPlaneFilter.filter(excludedGroundPlane);*/
-
-    //std::cout << "Original Cloud\n " << cloud << std::endl;  
+    removeGroundPlaneFilter.filter(excludedGroundPlane); 
 
 }
 
-void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &output, pcl::PointCloud<pcl::FPFHSignature33> &descriptors, pcl::PointCloud<pcl::Normal> &normals)
+void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &output, pcl::PointCloud<pcl::FPFHSignature33> &descriptors, float leafSize /*= 0.1*/)
 {      
-    float normalRadius = 0.8;
+    float normalRadius = leafSize*2.5;
     
     //Calculate normals
     pcl::PointCloud<pcl::Normal> fullCloudNormals;
@@ -162,12 +110,12 @@ void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &
 
     //Extract keypoints
     
-    pcl::ISSKeypoint3D<pcl::PointXYZ, pcl::PointXYZ> keypointDetector;
+    pcl::ISSKeypoint3D<pcl::PointXYZ, pcl::PointXYZ> keypointDetector; // Possible to do this after processing if you pass original cloud to setsearchsurface()
     keypointDetector.setInputCloud(cloud.makeShared());
-    keypointDetector.setSalientRadius(normalRadius*1.5);
-    keypointDetector.setNonMaxRadius(normalRadius*1.5);
-    keypointDetector.setThreshold21(0.5);
-    keypointDetector.setThreshold32(0.5);
+    keypointDetector.setSalientRadius(leafSize*5);
+    keypointDetector.setNonMaxRadius(leafSize*3);
+    keypointDetector.setThreshold21(0.8);
+    keypointDetector.setThreshold32(0.8);
     keypointDetector.setNormals(fullCloudNormals.makeShared());
     keypointDetector.compute(output);
 
@@ -186,26 +134,6 @@ void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &
     keypointExtractor.setInputCloud(fullCloudDescriptors.makeShared());
     keypointExtractor.setIndices(keypointDetector.getKeypointsIndices());
     keypointExtractor.filter(descriptors);
-
-    //Only extract normals from the keypoints
-    pcl::ExtractIndices<pcl::Normal> normalExtractor;
-    normalExtractor.setInputCloud(fullCloudNormals.makeShared());
-    normalExtractor.setIndices(keypointDetector.getKeypointsIndices());
-    normalExtractor.filter(normals);
-}
-
-void FeatureAssociation::_publish(const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud, const pcl::PointCloud<pcl::PointXYZ> &featureCloud)
-{
-    if (pubGroundPlaneCloud2.getNumSubscribers() > 0){
-        sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(groundPlaneCloud, msg);
-        pubGroundPlaneCloud2.publish(msg);
-    }
-    if (pubFeatureCloud2.getNumSubscribers() > 0){
-        sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(featureCloud, msg);
-        pubFeatureCloud2.publish(msg);
-    }
 }
 
 pcl::RangeImage FeatureAssociation::_pointCloud2RangeImage(const pcl::PointCloud<pcl::PointXYZ> &cloud)
@@ -235,60 +163,51 @@ pcl::RangeImage FeatureAssociation::_pointCloud2RangeImage(const pcl::PointCloud
 
 }
 
-void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud, const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors)
+void FeatureAssociation::_warpPoints() //#TODO
 {
-    // MATCH CORRESPONDENCES
+    double timeDiff = currentTime.toSec() - prevTime.toSec();
+    double zPrev = transformation.rotation().eulerAngles(0, 1, 2).z();
+}
+
+void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud, const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors)
+{   
+    
+    // Find correspondences
     pcl::registration::CorrespondenceEstimation<pcl::FPFHSignature33, pcl::FPFHSignature33> matcher;
+    
     matcher.setInputSource(_prevFeatureDescriptor.makeShared());
     matcher.setInputTarget(featureDescriptors.makeShared());
 
     pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
-    matcher.determineReciprocalCorrespondences(*allCorrespondences);
+    matcher.determineReciprocalCorrespondences(*allCorrespondences);    
 
-    std::cout << "MATCHES SIZE: " << allCorrespondences->size() << std::endl;
-    
+    // Rejection step
+    pcl::CorrespondencesPtr partialOverlapCorrespondences (new pcl::Correspondences);
 
-    // #TODO: REJECT CORRESPONDENCES
     pcl::CorrespondencesPtr goodCorrespondences (new pcl::Correspondences);
+
+    pcl::registration::CorrespondenceRejectorTrimmed trimmer;
+    trimmer.setInputCorrespondences(allCorrespondences);
+    trimmer.setOverlapRatio(0.7);
+    trimmer.getCorrespondences(*partialOverlapCorrespondences);
+
+
     pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointXYZ> rej;
     rej.setInputSource(_prevFeatureCloud.makeShared());
     rej.setInputTarget(featureCloud.makeShared());
-    rej.setInlierThreshold(2.5);
-    rej.setMaximumIterations(1000);
+    rej.setInlierThreshold(1.5);
+    rej.setMaximumIterations(50);
     rej.setRefineModel(true);
-    rej.setInputCorrespondences(allCorrespondences);
+    rej.setInputCorrespondences(partialOverlapCorrespondences);
     rej.getCorrespondences(*goodCorrespondences);
 
-    std::cout << "GOOD MATCHES SIZE: " << goodCorrespondences->size() << std::endl;
-
-
-
-    /*pcl::registration::CorrespondenceRejectorFeatures correspondenceRejector;
-    correspondenceRejector.setSourcePoints(source);
-    correspondenceRejector.setInputCorrespondences(allCorrespondences);
-    correspondenceRejector.getCorrespondences(*goodCorrespondences);
-
-    std::cout << "AFTER REJECTION MATCHES: " <<goodCorrespondences->size() << std::endl;*/
-    
     //Calculate transformation
-    /*pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ> tEst;
-    pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ>::Matrix4 T;
-
-    tEst.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);*/
-    pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ> lm;
-    //pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ>::Matrix4 T;
+    //pcl::registration::TransformationEstimationPointToPlane<pcl::PointXYZ, pcl::PointXYZ> tEst;
+    pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ> tEst;
+    //pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ> tEst;
     Eigen::Matrix4f T;
-    lm.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);
-    std::cout<< "Initial transformation\n" << T << std::endl;
+    tEst.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);
 
-    /*pcl::PointCloud<pcl::PointXYZ> prev2currentAligned;
-    pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> gicp;
-    gicp.setInputSource(_prevFeatureCloud.makeShared());
-    gicp.setInputTarget(featureCloud.makeShared());
-    gicp.align(prev2currentAligned, T);
-    Eigen::Matrix4f TFinal = gicp.getFinalTransformation();
-    
-    std::cout << "Final transformation\n" << TFinal << std::endl;*/
     //TFinal = T;
     //Eigen::Affine3f t; t = T;
     transformation = T.cast<double>();
@@ -298,17 +217,14 @@ void FeatureAssociation::_publishTransformation()
 {   
     if (pubOdometry.getNumSubscribers() > 0){
 
-        currentTime = ros::Time::now();
         double delta_x = transformation.translation().x();
         double delta_y = transformation.translation().y();
         double delta_z = transformation.translation().z();
 
-        //tf::Transform tfTransform;
-        //tf::transformEigenToTF(transformation, tfTransform);
         geometry_msgs::TransformStamped tfMsg   = tf2::eigenToTransform(transformation);
         tfMsg.header.stamp                      = currentTime;
         tfMsg.header.frame_id                   = "odom";
-        tfMsg.child_frame_id                    = "base_link";
+        tfMsg.child_frame_id                    = "map";
 
         odomBroadcaster.sendTransform(tfMsg);
 
@@ -321,11 +237,91 @@ void FeatureAssociation::_publishTransformation()
         odom.pose.pose.position.z   = delta_z;
         odom.pose.pose.orientation  = tfMsg.transform.rotation;
 
-        odom.child_frame_id = "base_link";
+        odom.child_frame_id = "map";
 
         pubOdometry.publish(odom);
     }
-    prevTime = currentTime; // should be inside if?
 
 }
 
+void FeatureAssociation::_publishFeatureCloud(const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud)
+{
+    if (pubFeatureCloud2.getNumSubscribers() > 0){
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(featureCloud, msg);
+        msg.header.stamp = currentTime;
+        msg.header.frame_id = "lidar";
+        pubFeatureCloud2.publish(msg);
+    }
+    if (pubGroundPlaneCloud2.getNumSubscribers() > 0){
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(groundPlaneCloud, msg);
+        msg.header.stamp = currentTime;
+        msg.header.frame_id = "lidar";
+        pubGroundPlaneCloud2.publish(msg);
+    }
+}
+
+void FeatureAssociation::_publish(const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud)
+{   
+
+    _publishFeatureCloud(featureCloud, groundPlaneCloud);
+    _publishTransformation();
+
+}
+
+void FeatureAssociation::runOnce()
+{   
+    if (newCloud){
+
+        newCloud=false;
+
+        pcl::PointCloud<pcl::PointXYZ> removedNansCloud;
+        pcl::PointCloud<pcl::PointXYZ> cloud;
+
+        std::vector<int> indices;
+        pcl::removeNaNFromPointCloud(currentCloud, removedNansCloud, indices);
+
+        float leafSize = 0.1;
+        pcl::VoxelGrid<pcl::PointXYZ> voxelGridFilter;
+        voxelGridFilter.setInputCloud(removedNansCloud.makeShared());
+        voxelGridFilter.setLeafSize(leafSize, leafSize, leafSize);
+        voxelGridFilter.filter(cloud);
+
+        //std::cout << "INCLOUD\n" << cloud << std::endl;
+
+        pcl::PointCloud<pcl::PointXYZ> groundPlane;
+        pcl::PointCloud<pcl::PointXYZ> excludedGroundPlane;
+        _findGroundPlane(cloud, groundPlane, excludedGroundPlane);
+        //std::cout << "EXCLUDED GROUND PLANE\n" << excludedGroundPlane << std::endl;
+        //std::cout << "GROUND PLANE\n" << groundPlane << std::endl;  
+
+        pcl::PointCloud<pcl::PointXYZ> featureCloud;
+        pcl::PointCloud<pcl::FPFHSignature33> featureDescriptors;
+        pcl::PointCloud<pcl::Normal> featureNormals;
+        _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors, leafSize);
+        //std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
+        //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
+
+        if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty() ) {
+            std::cout << "INITIALIZING PREVIOUS" << std::endl;
+            _prevFeatureCloud       = featureCloud;
+            _prevFeatureDescriptor  = featureDescriptors;
+            _prevGroundPlaneCloud   = groundPlane;
+            prevTime                = currentTime;
+
+        }
+        else {
+
+            _calculateTransformation(groundPlane, featureCloud, featureDescriptors);
+
+            _publish(featureCloud, groundPlane);
+
+            _prevFeatureCloud       = featureCloud;
+            _prevFeatureDescriptor  = featureDescriptors;
+            _prevGroundPlaneCloud   = groundPlane;
+            prevTime                = currentTime;
+
+        }
+    }
+}
