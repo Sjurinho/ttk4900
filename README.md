@@ -29,3 +29,14 @@ eigen3/Eigen -> Eigen
 pcl-1.8/pcl -> pcl
 eigen3/unsupported -> unsupported
 ```
+
+### GTSAM potential fix
+If an error "cannot find -lBoost::timer" occurs, then this may fix it:
+Go into /usr/local/lib/cmake/GTSAM/GTSAM-exports.cmake and change the linker line
+```
+INTERFACE_LINK_LIBRARIES "Boost::serialization;Boost::system;Boost::filesystem;Boost::thread;Boost::date_time;Boost::regex;Boost::timer;Boost::chrono;tbb;tbbmalloc;metis-gtsam
+```
+to 
+```
+INTERFACE_LINK_LIBRARIES "Boost::serialization;Boost::system;Boost::filesystem;Boost::thread;Boost::date_time;Boost::regex;/usr/lib/x86_64-linux-gnu/libboost_timer.so;Boost::chrono;tbb;tbbmalloc;metis-gtsam
+```
