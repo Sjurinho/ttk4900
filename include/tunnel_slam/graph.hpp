@@ -54,14 +54,12 @@ class Graph
 
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
-        gtsam::Values initialEstimate, optimizedEstimate, isamCurrentEstimate;
+        gtsam::Values initialEstimate, isamCurrentEstimate;
         gtsam::ISAM2* isam;
 
         gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise;
 
         std::mutex mtx;
-
-        int latestFrameID;
 
         pcl::PointXYZ previousPosPoint, currentPosPoint;
         pcl::PointCloud<pcl::PointXYZ>::Ptr currentCloud;
@@ -69,14 +67,18 @@ class Graph
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
         vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloudKeyFrames;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyFramesMap; //For publishing only
+
 
         double disp[6] = { 0 }; // [roll, pitch, yaw, x, y, z]
-        gtsam::Pose3 poseInWorld = gtsam::Pose3::identity();
+        gtsam::Pose3 currentPoseInWorld, lastPoseInWorld = gtsam::Pose3::identity();
+        gtsam::Pose3 displacement;
 
         double timeOdometry, timeMap = 0;
         bool newLaserOdometry, newMap = false;
 
         void _incrementPosition();
+        void _smoothPoses();
         void _performIsam();
         void _publishTransformed();
 };

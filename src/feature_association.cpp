@@ -22,6 +22,7 @@
 #include <pcl/registration/transformation_estimation_lm.h>
 #include <pcl/registration/transformation_estimation_2D.h>
 #include <pcl/registration/transformation_estimation_point_to_plane.h>
+#include <pcl/registration/gicp.h>
 
 #include <tf_conversions/tf_eigen.h>
 #include <tf/transform_broadcaster.h>
@@ -173,12 +174,11 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
 {   
     
     // Find correspondences
+    pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceEstimation<pcl::FPFHSignature33, pcl::FPFHSignature33> matcher;
     
-    matcher.setInputSource(_prevFeatureDescriptor.makeShared());
-    matcher.setInputTarget(featureDescriptors.makeShared());
-
-    pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
+    matcher.setInputSource(featureDescriptors.makeShared());
+    matcher.setInputTarget(_prevFeatureDescriptor.makeShared());
     matcher.determineReciprocalCorrespondences(*allCorrespondences);    
 
     // Rejection step
@@ -188,13 +188,13 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
 
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     trimmer.setInputCorrespondences(allCorrespondences);
-    trimmer.setOverlapRatio(0.7);
+    trimmer.setOverlapRatio(0.6);
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
 
     pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointXYZ> rej;
-    rej.setInputSource(_prevFeatureCloud.makeShared());
-    rej.setInputTarget(featureCloud.makeShared());
+    rej.setInputSource(featureCloud.makeShared());
+    rej.setInputTarget(_prevFeatureCloud.makeShared());
     rej.setInlierThreshold(1.5);
     rej.setMaximumIterations(50);
     rej.setRefineModel(true);
@@ -206,7 +206,19 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ> tEst;
     //pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ> tEst;
     Eigen::Matrix4f T;
-    tEst.estimateRigidTransformation(_prevFeatureCloud, featureCloud, *goodCorrespondences, T);
+
+
+    tEst.estimateRigidTransformation(featureCloud, _prevFeatureCloud, *goodCorrespondences, T);
+
+    /*Eigen::Matrix4f TFinal;
+    pcl::PointCloud<pcl::PointXYZ> alignedCloud;
+    pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> gicp;
+    gicp.setInputSource(featureCloud.makeShared());
+    gicp.setInputTarget(_prevFeatureCloud.makeShared());
+    gicp.align(alignedCloud, T);
+    TFinal = gicp.getFinalTransformation();*/
+
+
 
     //TFinal = T;
     //Eigen::Affine3f t; t = T;
@@ -282,7 +294,7 @@ void FeatureAssociation::runOnce()
         std::vector<int> indices;
         pcl::removeNaNFromPointCloud(currentCloud, removedNansCloud, indices);
 
-        float leafSize = 0.1;
+        float leafSize = 0.2; // 0.1 is ait, 0.15 makes it turn less, 0.2 is pretty porn (i think that may be because it makes the point cloud less dense "close" to the sensor, since it typically is alot denser here than in the end)
         pcl::VoxelGrid<pcl::PointXYZ> voxelGridFilter;
         voxelGridFilter.setInputCloud(removedNansCloud.makeShared());
         voxelGridFilter.setLeafSize(leafSize, leafSize, leafSize);
@@ -298,7 +310,6 @@ void FeatureAssociation::runOnce()
 
         pcl::PointCloud<pcl::PointXYZ> featureCloud;
         pcl::PointCloud<pcl::FPFHSignature33> featureDescriptors;
-        pcl::PointCloud<pcl::Normal> featureNormals;
         _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors, leafSize);
         //std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
         //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;

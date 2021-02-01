@@ -8,6 +8,7 @@
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
+#include <opencv/cv.h>
 
 //constructor method
 Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
@@ -29,6 +30,8 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     cloudKeyPositions.reset(new pcl::PointCloud<pcl::PointXYZ>());
     currentCloud.reset(new pcl::PointCloud<pcl::PointXYZ>());
     cloudKeyPoses.reset(new pcl::PointCloud<PointXYZRPY>());
+    cloudKeyFramesMap.reset(new pcl::PointCloud<pcl::PointXYZ>());
+
 
 }
 
@@ -41,42 +44,87 @@ Graph::~Graph()
 void Graph::_incrementPosition()
 {   
     gtsam::Vector3 rotVec(disp[0], disp[1], disp[2]);
-    gtsam::Point3 trans(-disp[3], -disp[4], -disp[5]);
+    gtsam::Point3 trans(disp[3], disp[4], disp[5]);
     gtsam::Rot3 oriLocal = gtsam::Rot3::RzRyRx(rotVec);
-    gtsam::Pose3 localPose(oriLocal, trans);
+    displacement = gtsam::Pose3(oriLocal, trans);
 
-    //localPose.compose(poseInWorld);
-    poseInWorld = poseInWorld * localPose;
-    currentPosPoint = pcl::PointXYZ(poseInWorld.translation().x(), poseInWorld.translation().y(), poseInWorld.translation().z());
+    //displacement.compose(poseInWorld);
+    currentPoseInWorld = currentPoseInWorld * displacement;
+    currentPosPoint = pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z());
 }
 
 void Graph::_performIsam()
 {
-    currentPosPoint.x = disp[3];
-    currentPosPoint.y = disp[4];
-    currentPosPoint.z = disp[5];
-
     bool saveThisKeyFrame = true;
-    if (sqrt((previousPosPoint.x-previousPosPoint.x)*(previousPosPoint.x-currentPosPoint.x)
-            +(previousPosPoint.y-currentPosPoint.y)*(previousPosPoint.y-currentPosPoint.y)
-            +(previousPosPoint.z-currentPosPoint.z)*(previousPosPoint.z-currentPosPoint.z)) < 0.3){
+
+    double squaredDistance = 
+    (previousPosPoint.x-currentPosPoint.x)*(previousPosPoint.x-currentPosPoint.x)
+    +(previousPosPoint.y-currentPosPoint.y)*(previousPosPoint.y-currentPosPoint.y)
+    +(previousPosPoint.z-currentPosPoint.z)*(previousPosPoint.z-currentPosPoint.z);
+
+    if (sqrt(squaredDistance) < 0.3){
         saveThisKeyFrame = false;
     }
 
     if (saveThisKeyFrame == false && !cloudKeyPositions->points.empty())
         	return;
 
+    ROS_INFO("SAVING NEW KEY FRAME");
     previousPosPoint = currentPosPoint;
 
     if (cloudKeyPositions->points.empty()){
         // #TODO: INITIALIZE GRAPH
-        //_graph.add(gtsam::PriorFactor<gtsam::Pose3>(0, gtsam::Rot3::RzRyRx()))
+        _graph.add(gtsam::PriorFactor<gtsam::Pose3>(0, displacement, priorNoise));
+        initialEstimate.insert(0, displacement);
+        //lastPoseInWorld = currentPoseInWorld;
     }
     else{
+        _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(cloudKeyPositions->points.size()-1, cloudKeyPositions->points.size(), lastPoseInWorld.between(currentPoseInWorld), odometryNoise));
+        initialEstimate.insert(cloudKeyPositions->points.size(), currentPoseInWorld);
         // #TODO: ADD BETWEEN
     }
 
+    PointXYZRPY currentPose;
     // #TODO: ADD TO ISAM
+    isam->update(_graph, initialEstimate);
+    isam->update();
+
+    _graph.resize(0);
+    initialEstimate.clear();
+
+    isamCurrentEstimate = isam->calculateEstimate();
+
+    currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(isamCurrentEstimate.size()-1);
+
+    cloudKeyPositions->push_back(pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z()));
+
+    currentPose.x = currentPoseInWorld.x(); currentPose.y = currentPoseInWorld.y(); currentPose.z = currentPoseInWorld.z();
+    currentPose.roll = currentPoseInWorld.rotation().roll();
+    currentPose.pitch = currentPoseInWorld.rotation().pitch();
+    currentPose.yaw = currentPoseInWorld.rotation().yaw();
+
+    cloudKeyPoses->push_back(currentPose);
+
+    lastPoseInWorld = currentPoseInWorld;
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr thisKeyFrame(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::copyPointCloud(*currentCloud, *thisKeyFrame);
+    cloudKeyFrames.push_back(thisKeyFrame);
+}
+
+void Graph::_smoothPoses(){
+    int smoothingFrames = 10;
+    if (cloudKeyFrames.size() < smoothingFrames) return;
+    int latestFrame = cloudKeyFrames.size()-1;
+    for (int i = 10; i > 0; --i){
+        int frameID = latestFrame - i;
+        pcl::PointCloud<pcl::PointXYZ> frameFrom = *cloudKeyFrames[frameID];
+        pcl::PointCloud<pcl::PointXYZ> frameTo = *cloudKeyFrames[frameID+1];
+        PointXYZRPY poseFrom = cloudKeyPoses->at(frameID);
+        PointXYZRPY poseTo = cloudKeyPoses->at(frameID+1);
+
+
+    } 
 }
 
 void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
@@ -111,6 +159,7 @@ void Graph::runOnce()
         newLaserOdometry, newMap = false;
 
         _incrementPosition();
+        _performIsam();
         _publishTransformed();
 
     }
@@ -120,9 +169,10 @@ void Graph::runOnce()
 void Graph::_publishTransformed(){
     if (pubTransformedMap.getNumSubscribers() > 0){
         pcl::PointCloud<pcl::PointXYZ> currentInWorld;
-        pcl::transformPointCloud(*currentCloud, currentInWorld, poseInWorld.matrix());
+        pcl::transformPointCloud(*currentCloud, currentInWorld, currentPoseInWorld.matrix());
+        *cloudKeyFramesMap += currentInWorld;
         sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(currentInWorld, msg);
+        pcl::toROSMsg(*cloudKeyFramesMap, msg);
         msg.header.frame_id = "map";
         pubTransformedMap.publish(msg);
     }
@@ -131,13 +181,13 @@ void Graph::_publishTransformed(){
         pose.header.frame_id = "map";
         pose.header.stamp = ros::Time::now();
 
-        pose.pose.position.x   = poseInWorld.x();
-        pose.pose.position.y   = poseInWorld.y();
-        pose.pose.position.z   = poseInWorld.z();
-        pose.pose.orientation.w  = poseInWorld.rotation().toQuaternion().w();
-        pose.pose.orientation.x  = poseInWorld.rotation().toQuaternion().x();
-        pose.pose.orientation.y  = poseInWorld.rotation().toQuaternion().y();
-        pose.pose.orientation.z  = poseInWorld.rotation().toQuaternion().z();
+        pose.pose.position.x   = currentPoseInWorld.x();
+        pose.pose.position.y   = currentPoseInWorld.y();
+        pose.pose.position.z   = currentPoseInWorld.z();
+        pose.pose.orientation.w  = currentPoseInWorld.rotation().toQuaternion().w();
+        pose.pose.orientation.x  = currentPoseInWorld.rotation().toQuaternion().x();
+        pose.pose.orientation.y  = currentPoseInWorld.rotation().toQuaternion().y();
+        pose.pose.orientation.z  = currentPoseInWorld.rotation().toQuaternion().z();
 
         pubTransformedPose.publish(pose);
 
