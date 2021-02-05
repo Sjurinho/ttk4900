@@ -17,7 +17,7 @@
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
-#include <gtsam/nonlinear/ISAM2Params.h>
+//#include <gtsam/nonlinear/ISAM2Params.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
@@ -50,6 +50,8 @@ class Graph
         ros::Subscriber subMap;
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
+        ros::Publisher pubPoseArray;
+
 
 
         // gtsam estimation members
@@ -66,7 +68,7 @@ class Graph
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloudKeyFrames;
+        std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloudKeyFrames;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyFramesMap; //For publishing only
 
 
@@ -78,8 +80,10 @@ class Graph
         bool newLaserOdometry, newMap = false;
 
         void _incrementPosition();
-        void _smoothPoses();
+        void _transformMapToWorld();
+        float _smoothPoses();
         void _performIsam();
+        void _publishTrajectory();
         void _publishTransformed();
 };
 #endif
