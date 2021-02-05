@@ -2,14 +2,14 @@ MASTER THESIS: Tunnel based SLAM system for autonomous ground vehicles.
 
 ## Requirements:
 
-### GTSAM: v4.0.2
+### GTSAM: v4.0.0-alpha2
 ```
-wget -O ~/Downloads/gtsam.zip https://github.com/borglab/gtsam/archive/4.0.2.zip
+wget -O ~/Downloads/gtsam.zip https://github.com/borglab/gtsam/archive/4.0.0-alpha2.zip
 cd ~/Downloads/ && unzip gtsam.zip -d ~/Downloads/
-cd ~/Downloads/gtsam-4.0.2/
+cd ~/Downloads/gtsam-4.0.0-alpha2/
 mkdir build && cd build
-cmake -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF ..
-sudo make install -j8
+cmake ..
+sudo make install
 ```
 ### PCL: v1.8
 ```

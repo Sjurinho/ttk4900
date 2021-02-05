@@ -1,5 +1,5 @@
 # Defining the cmake vesrion and project name
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.8.0)
 project(tunnel_slam)
 
 # compiling the code with c++11
@@ -7,7 +7,12 @@ add_compile_options(-std=c++11)
 
 # Finding the packages required (dependencies for this package)
 find_package(PCL 1.8 REQUIRED)
-find_package(GTSAM REQUIRED)
+find_package(GTSAM 4.0.0 REQUIRED COMPONENTS
+  geometry
+  nonlinear
+  slam 
+)
+find_package(OpenCV REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
@@ -27,11 +32,12 @@ include_directories(
   include/tunnel_slam
   ${catkin_INCLUDE_DIRS}
   ${PCL_INLCUDE_DIRS}
-  ${GTSAM_INCLUDE_DIRS}
+  ${GTSAM_INCLUDE_DIR}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 link_directories(${PCL_LIBRARY_DIRS})
-link_directories(${GTSAM_LIBRARY_DIRS})
+link_directories(${GTSAM_LIBRARY_DIR})
 add_definitions(${PCL_DEFINITIONS})
 add_definitions(${GTSAM_DEFINITIONS})
 
@@ -51,6 +57,7 @@ target_link_libraries(feature_association_node
 )
 target_link_libraries(graph_node
   gtsam
+  ${OpenCV_LIBRARIES}
   ${PCL_LIBRARIES}
   ${catkin_LIBRARIES}
 )
