@@ -188,7 +188,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
 
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     trimmer.setInputCorrespondences(allCorrespondences);
-    trimmer.setOverlapRatio(0.6);
+    trimmer.setOverlapRatio(0.4);
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
 

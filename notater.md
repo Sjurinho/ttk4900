@@ -9,3 +9,6 @@
 ## MØTE 28.1.2021 - Semcon
 - Mulighet for å recorde ekte datasett
 - TA KONTAKT MED REVOLVE
+
+## MØTE 08.02.2021 - NTNU
+- Preconditioning matrices for faster computation
