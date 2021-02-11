@@ -12,6 +12,7 @@
 #include <gtsam/slam/BetweenFactor.h>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/eigen.hpp>
 
 //constructor method
 Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
@@ -31,14 +32,27 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     parameters.relinearizeThreshold = 0.01;
     parameters.relinearizeSkip      = 1;
     isam = new gtsam::ISAM2(parameters);
+
+    gtsam::Vector6 Sigmas(6);
+    Sigmas << 1, 1, 1e-1, 1e-1, 1e-1, 1; 
+
     cloudKeyPositions.reset(new pcl::PointCloud<pcl::PointXYZ>());
     currentCloud.reset(new pcl::PointCloud<pcl::PointXYZ>());
     cloudKeyPoses.reset(new pcl::PointCloud<PointXYZRPY>());
-    cloudKeyFramesMap.reset(new pcl::PointCloud<pcl::PointXYZ>());
+    localKeyFramesMap.reset(new pcl::PointCloud<pcl::PointXYZ>());
+    fullMap.reset(new pcl::PointCloud<pcl::PointXYZ>());
+
+    cloudMap.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointXYZ>(voxelRes));
+    cloudMap->setInputCloud(fullMap);
+
+    priorNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
+    odometryNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
+    constraintNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
+
 
 
 }
-
+nput and target clou
 // Destructor method
 Graph::~Graph()
 {
@@ -73,7 +87,7 @@ void Graph::_performIsam()
     if (saveThisKeyFrame == false && !cloudKeyPositions->points.empty())
         	return;
 
-    ROS_INFO("SAVING NEW KEY FRAME");
+    //ROS_INFO("SAVING NEW KEY FRAME");
     previousPosPoint = currentPosPoint;
 
     if (cloudKeyPositions->points.empty()){
@@ -113,10 +127,28 @@ void Graph::_performIsam()
     cloudKeyFrames.push_back(thisKeyFrame);
 }
 
-float Graph::_smoothPoses(){
+void Graph::_createKeyFramesMap(){
+    if (cloudKeyFrames.size() < smoothingFrames) return;
+    localKeyFramesMap->clear();
+    for (int i = 0; i<smoothingFrames; i++){
+        int frameID = cloudKeyFrames.size() - smoothingFrames + i;
+        PointXYZRPY poseInFrame = cloudKeyPoses->at(frameID);
+        gtsam::Vector3 rotVec(poseInFrame.roll, poseInFrame.pitch, poseInFrame.yaw);
+        gtsam::Point3 trans(poseInFrame.x, poseInFrame.y, poseInFrame.z);
+        gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
+        gtsam::Pose3 pose = gtsam::Pose3(orientation, trans);
+
+        pcl::PointCloud<pcl::PointXYZ> keyFrameInWorld;
+        pcl::transformPointCloud(*cloudKeyFrames[i], keyFrameInWorld, pose.matrix());
+        *localKeyFramesMap += keyFrameInWorld;
+    }
+}
+
+void Graph::_smoothPoses(){
     auto skewSymmetric = [](float a, float b, float c){return gtsam::skewSymmetric(a, b, c);};
-    int smoothingFrames = 10;
-    if (cloudKeyFrames.size() < smoothingFrames) return 0;
+
+    if (cloudKeyFrames.size() < smoothingFrames) return;
+    //ROS_INFO("RUNNING SMOOTHING");
     int latestFrame = cloudKeyFrames.size();
     int minNrOfPoints = std::numeric_limits<int>::max();
     for (int i = 0; i < smoothingFrames; ++i){
@@ -131,125 +163,235 @@ float Graph::_smoothPoses(){
     int BRows = ARows;
     int ACols = poseD*smoothingFrames; //+ pointD*minNrOfPoints;
     int XCols = ACols;
-    cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_32FC1);
-    cv::Mat matAt(ACols, ARows, CV_32FC1, cv::Scalar::all(0.0));
-    cv::Mat matAtA(ACols, ACols, CV_32FC1, cv::Scalar::all(0));
-    cv::Mat matB(BRows, 1, CV_32FC1, cv::Scalar::all(0));
-    cv::Mat matAtB(ACols, 1, CV_32FC1, cv::Scalar::all(0));
-    cv::Mat matX(XCols, 1, CV_32FC1, cv::Scalar::all(0));
-    for (int k = 0; k < smoothingFrames; ++k){
-        int frameID = latestFrame - smoothingFrames + k;
-        pcl::PointCloud<pcl::PointXYZ> framePoints = *cloudKeyFrames[frameID];
-        pcl::PointCloud<pcl::PointXYZ> mapLocal;
-        PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
+    int iter = 0;
+    float lambda = 1e-4;
+    std::vector<gtsam::Point3> worldPoints; 
+    worldPoints.reserve(minNrOfPoints*smoothingFrames);
+    std::vector<gtsam::Point3> localPoints; 
+    localPoints.reserve(minNrOfPoints*smoothingFrames);
+    for (int iter = 0; iter<maxIterSmoothing; iter++){
+        worldPoints.clear(); localPoints.clear();
+        cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_32FC1);
+        cv::Mat matAt(ACols, ARows, CV_32FC1, cv::Scalar::all(0.0));
+        cv::Mat matAtA(ACols, ACols, CV_32FC1, cv::Scalar::all(0));
+        cv::Mat matB(BRows, 1, CV_32FC1, cv::Scalar::all(0));
+        cv::Mat matAtB(ACols, 1, CV_32FC1, cv::Scalar::all(0));
+        cv::Mat matX(XCols, 1, CV_32FC1, cv::Scalar::all(0));
+        for (int k = 0; k < smoothingFrames; ++k){
+            //#TODO: CALCULATE CORRESPONDENCES DIFFERENTLY
+            int frameID = latestFrame - smoothingFrames + k;
+            pcl::PointCloud<pcl::PointXYZ> framePoints = *cloudKeyFrames[frameID];
+            pcl::PointCloud<pcl::PointXYZ> mapLocal;
+            PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
 
-        gtsam::Vector3 rotVec(keyPose.roll, keyPose.pitch, keyPose.yaw);
-        gtsam::Point3 trans(keyPose.x, keyPose.y, keyPose.z);
-        gtsam::Rot3 oriLocal = gtsam::Rot3::RzRyRx(rotVec);
-        gtsam::Pose3 poseInWorld(oriLocal, trans);
+            gtsam::Pose3 poseInWorld;
+            _fromPointXYZRPYToPose3(keyPose, poseInWorld);
 
-        pcl::transformPointCloud(*cloudKeyFramesMap, mapLocal, poseInWorld.inverse().matrix()); //Need to use map instead
+            pcl::transformPointCloud(*fullMap, mapLocal, poseInWorld.inverse().matrix()); //Need to use map instead
 
-        pcl::KdTreeFLANN<pcl::PointXYZ> kdTree;
-        kdTree.setInputCloud(mapLocal.makeShared());
-        std::vector<int> indices;
-        std::vector<float> distances;
-        for (int j = 0; j < minNrOfPoints; j++){
-            auto pointInFrame = framePoints.at(j);
+            pcl::KdTreeFLANN<pcl::PointXYZ> kdTree;
+            kdTree.setInputCloud(mapLocal.makeShared());
+            /*pcl::transformPointCloud(*localKeyFramesMap, mapLocal, poseInWorld.inverse().matrix()); //Need to use map instead*/
 
-            if (kdTree.nearestKSearch(pointInFrame, 1, indices, distances) > 0) {
-                auto x_wjPCL = cloudKeyFramesMap->at(indices[0]);
-                auto x_wj = gtsam::Point3(x_wjPCL.x, x_wjPCL.y, x_wjPCL.z);
-                auto x_Lj = gtsam::Point3(pointInFrame.x, pointInFrame.y, pointInFrame.z);
-                auto R_wLi = poseInWorld.rotation();
-                auto t_wi  = poseInWorld.translation();
+            std::vector<int> indices;
+            std::vector<float> distances;
+            for (int j = 0; j < minNrOfPoints; j++){
+                auto pointInFrame = framePoints.at(j);
+                if (kdTree.nearestKSearch(pointInFrame, 1, indices, distances) > 0) {
+                    auto x_wjPCL = fullMap->at(indices[0]);
+                    //auto x_wjPCL = localKeyFramesMap->at(indices[0]);
 
-                /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_32F, cv::Scalar::all(0));
-                J_hij_xwj.at<float>(0, 0) = R_wLi.transpose()(0, 0);
-                J_hij_xwj.at<float>(0, 1) = R_wLi.transpose()(0, 1);
-                J_hij_xwj.at<float>(0, 2) = R_wLi.transpose()(0, 2);
-                J_hij_xwj.at<float>(1, 0) = R_wLi.transpose()(1, 0);
-                J_hij_xwj.at<float>(1, 1) = R_wLi.transpose()(1, 1);
-                J_hij_xwj.at<float>(1, 2) = R_wLi.transpose()(1, 2);
-                J_hij_xwj.at<float>(2, 0) = R_wLi.transpose()(2, 0);
-                J_hij_xwj.at<float>(2, 1) = R_wLi.transpose()(2, 1);
-                J_hij_xwj.at<float>(2, 2) = R_wLi.transpose()(2, 2);*/
+                    auto x_wj = gtsam::Point3(x_wjPCL.x, x_wjPCL.y, x_wjPCL.z);
+                    auto x_Lj = gtsam::Point3(pointInFrame.x, pointInFrame.y, pointInFrame.z);
+                    worldPoints[k*minNrOfPoints + j] = x_wj;
+                    localPoints[k*minNrOfPoints + j] = x_Lj;
+                    auto R_wLi = poseInWorld.rotation();
+                    auto t_wi  = poseInWorld.translation();
 
-                auto x_Li = R_wLi.transpose() * (x_wj - t_wi);
-                auto tmp = skewSymmetric(x_Li.x(), x_Li.y(), x_Li.z());
+                    /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_32F, cv::Scalar::all(0));
+                    J_hij_xwj.at<float>(0, 0) = R_wLi.transpose()(0, 0);
+                    J_hij_xwj.at<float>(0, 1) = R_wLi.transpose()(0, 1);
+                    J_hij_xwj.at<float>(0, 2) = R_wLi.transpose()(0, 2);
+                    J_hij_xwj.at<float>(1, 0) = R_wLi.transpose()(1, 0);
+                    J_hij_xwj.at<float>(1, 1) = R_wLi.transpose()(1, 1);
+                    J_hij_xwj.at<float>(1, 2) = R_wLi.transpose()(1, 2);
+                    J_hij_xwj.at<float>(2, 0) = R_wLi.transpose()(2, 0);
+                    J_hij_xwj.at<float>(2, 1) = R_wLi.transpose()(2, 1);
+                    J_hij_xwj.at<float>(2, 2) = R_wLi.transpose()(2, 2);*/
 
-                auto J_hij_TLiw = cv::Mat(pointD, poseD, CV_32F, cv::Scalar::all(0));
-                J_hij_TLiw.at<float>(0, 0) = -1.0;
-                J_hij_TLiw.at<float>(1, 1) = -1.0;
-                J_hij_TLiw.at<float>(2, 2) = -1.0;
-                J_hij_TLiw.at<float>(0, 3) = tmp(0, 0);
-                J_hij_TLiw.at<float>(0, 4) = tmp(0, 1);
-                J_hij_TLiw.at<float>(0, 5) = tmp(0, 2);
-                J_hij_TLiw.at<float>(1, 3) = tmp(1, 0);
-                J_hij_TLiw.at<float>(1, 4) = tmp(1, 1);
-                J_hij_TLiw.at<float>(1, 5) = tmp(1, 2);
-                J_hij_TLiw.at<float>(2, 3) = tmp(2, 0);
-                J_hij_TLiw.at<float>(2, 4) = tmp(2, 1);
-                J_hij_TLiw.at<float>(2, 5) = tmp(2, 2);
+                    //auto x_Li = R_wLi.transpose() * (x_wj - t_wi);
+                    //auto x_Li = poseInWorld.inverse() * x_wj;
+                    auto x_Li = x_Lj;
+                    //auto tmp = skewSymmetric(x_Li.x(), x_Li.y(), x_Li.z());
+                    auto tmp = R_wLi.matrix() * skewSymmetric(x_Li.x(), x_Li.y(), x_Li.z());
 
-                auto e = (poseInWorld.inverse()*x_wj) - x_Lj;
-                auto b_ij = cv::Mat(pointD,1,CV_32F,cv::Scalar::all(0));
-                b_ij.at<float>(0,0) = -e.x();
-                b_ij.at<float>(1,0) = -e.y();
-                b_ij.at<float>(2,0) = -e.z();
+                    auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_32F, cv::Scalar::all(0));
+                    /*J_hij_TwLi.at<float>(0, 0) = -1.0;
+                    J_hij_TwLi.at<float>(1, 1) = -1.0;
+                    J_hij_TwLi.at<float>(2, 2) = -1.0;
+                    J_hij_TwLi.at<float>(0, 3) = tmp(0, 0);
+                    J_hij_TwLi.at<float>(0, 4) = tmp(0, 1);
+                    J_hij_TwLi.at<float>(0, 5) = tmp(0, 2);
+                    J_hij_TwLi.at<float>(1, 3) = tmp(1, 0);
+                    J_hij_TwLi.at<float>(1, 4) = tmp(1, 1);
+                    J_hij_TwLi.at<float>(1, 5) = tmp(1, 2);
+                    J_hij_TwLi.at<float>(2, 3) = tmp(2, 0);
+                    J_hij_TwLi.at<float>(2, 4) = tmp(2, 1);
+                    J_hij_TwLi.at<float>(2, 5) = tmp(2, 2);*/
+                    J_hij_TwLi.at<float>(0, 0) = (float)R_wLi.matrix()(0, 0);
+                    J_hij_TwLi.at<float>(0, 1) = (float)R_wLi.matrix()(0, 1);
+                    J_hij_TwLi.at<float>(0, 2) = (float)R_wLi.matrix()(0, 2);
+                    J_hij_TwLi.at<float>(1, 0) = (float)R_wLi.matrix()(1, 0);
+                    J_hij_TwLi.at<float>(1, 1) = (float)R_wLi.matrix()(1, 1);
+                    J_hij_TwLi.at<float>(1, 2) = (float)R_wLi.matrix()(1, 2);
+                    J_hij_TwLi.at<float>(2, 0) = (float)R_wLi.matrix()(2, 0);
+                    J_hij_TwLi.at<float>(2, 1) = (float)R_wLi.matrix()(2, 1);
+                    J_hij_TwLi.at<float>(2, 2) = (float)R_wLi.matrix()(2, 2);
+                    J_hij_TwLi.at<float>(0, 3) = -tmp(0, 0);
+                    J_hij_TwLi.at<float>(0, 4) = -tmp(0, 1);
+                    J_hij_TwLi.at<float>(0, 5) = -tmp(0, 2);
+                    J_hij_TwLi.at<float>(1, 3) = -tmp(1, 0);
+                    J_hij_TwLi.at<float>(1, 4) = -tmp(1, 1);
+                    J_hij_TwLi.at<float>(1, 5) = -tmp(1, 2);
+                    J_hij_TwLi.at<float>(2, 3) = -tmp(2, 0);
+                    J_hij_TwLi.at<float>(2, 4) = -tmp(2, 1);
+                    J_hij_TwLi.at<float>(2, 5) = -tmp(2, 2);
 
-                auto ProwRange = cv::Range(k*minNrOfPoints*pointD + pointD*j, k*minNrOfPoints*pointD + pointD*j + pointD);
-                auto PcolRange = cv::Range(k*poseD, k*poseD + poseD);
-                //auto SrowRange = ProwRange;
-                //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
+                    //auto e = (poseInWorld.inverse()*x_wj) - x_Lj;
+                    auto e = (poseInWorld * x_Lj) - x_wj;
+                    auto b_ij = cv::Mat(pointD,1,CV_32F,cv::Scalar::all(0));
+                    b_ij.at<float>(0,0) = -e.x();
+                    b_ij.at<float>(1,0) = -e.y();
+                    b_ij.at<float>(2,0) = -e.z();
 
-                auto bColRange = cv::Range::all();
-                auto bRowRange = cv::Range(k*minNrOfPoints*pointD + j*pointD, k*minNrOfPoints*pointD + j*pointD + pointD);
+                    auto ProwRange = cv::Range(k*minNrOfPoints*pointD + pointD*j, k*minNrOfPoints*pointD + pointD*j + pointD);
+                    auto PcolRange = cv::Range(k*poseD, k*poseD + poseD);
+                    //auto SrowRange = ProwRange;
+                    //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
 
-                cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
+                    auto bColRange = cv::Range::all();
+                    auto bRowRange = cv::Range(k*minNrOfPoints*pointD + j*pointD, k*minNrOfPoints*pointD + j*pointD + pointD);
 
-                //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
-                cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
-                
-                J_hij_TLiw.copyTo(PsubMatA);
-                //J_hij_xwj.copyTo(SsubMatA);
-                b_ij.copyTo(bsubMatB);
+                    cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
+
+                    //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
+                    cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
+                    cv::Mat sigmas(6, 6, CV_32F, cv::Scalar::all(0));
+                    cv::eigen2cv(odometryNoise->covariance(), sigmas);
+                    cv::Mat sigmasqrt(6, 6, CV_32F, cv::Scalar::all(0));
+                    cv::sqrt(sigmas,sigmasqrt);
+                    cv::Mat sigmainvsqrt(6,6,CV_32F, cv::Scalar::all(0));
+                    sigmainvsqrt = sigmasqrt.inv();
+                    cv::Mat temp;
+                    sigmainvsqrt.convertTo(temp, CV_32F);
+                    auto whitener = J_hij_TwLi * temp * J_hij_TwLi.t();
+                    cv::Mat Ai = whitener * J_hij_TwLi;
+                    Ai.copyTo(PsubMatA);
+                    cv::Mat bi = whitener * b_ij;
+                    //J_hij_xwj.copyTo(SsubMatA);
+                    bi.copyTo(bsubMatB);
+                }
             }
         }
+        cv::transpose(matA, matAt);
+        matAtA = matAt * matA;
+        auto matAtAdiag = cv::Mat::diag(matAtA.diag());
+        matAtB = matAt * matB;
+        cv::solve(matAtA + (lambda * matAtAdiag), matAtB, matX, cv::DECOMP_QR);
+        std::vector<PointXYZRPY> keyPosesBefore;
+        std::vector<PointXYZRPY> keyPosesAfter;
+        std::vector<PointXYZRPY> keyPosesResult;
+        // Check Update
+        for (int k = 0; k < smoothingFrames; k++){
+            int frameID = latestFrame - smoothingFrames + k;
+            pcl::PointXYZ keyPos = cloudKeyPositions->at(frameID);
+            PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
+            keyPosesBefore.push_back(keyPose);
+
+            gtsam::Pose3 gtsamKeyPose;
+            _fromPointXYZRPYToPose3(keyPose, gtsamKeyPose);
+
+            gtsam::Vector6 xi;
+            xi << matX.at<float>(k*poseD + 3, 0), matX.at<float>(k*poseD + 4, 0), matX.at<float>(k*poseD + 5, 0), matX.at<float>(k*poseD + 0, 0), matX.at<float>(k*poseD + 1, 0), matX.at<float>(k*poseD + 2, 0);
+
+            gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
+
+            /*gtsam::Point3 trans(matX.at<float>(k*poseD + 0, 0), matX.at<float>(k*poseD + 1, 0), matX.at<float>(k*poseD + 2, 0));
+            gtsam::Vector3 rotVec(matX.at<float>(k*poseD + 3, 0), matX.at<float>(k*poseD + 4, 0), matX.at<float>(k*poseD + 5, 0));
+            gtsam::Pose3 correction(gtsam::Rot3::RzRyRx(rotVec), trans);*/
+
+            _fromPose3ToPointXYZRPY(gtsamKeyPose * tau, keyPose);
+            //_fromPose3ToPointXYZRPY(correction * gtsamKeyPose, keyPose);
+            keyPosesAfter.push_back(keyPose);
+        }
+        float fxBefore = 0;
+        float fxAfter = 0;
+        float fxResult = 0;
+        _evaluate_transformation(minNrOfPoints, latestFrame, keyPosesBefore, keyPosesAfter, worldPoints, localPoints, fxBefore, fxAfter);
+        auto streng = "BEFORE: " + std::to_string(fxBefore) + ", AFTER: " + std::to_string(fxAfter);
+        ROS_INFO(streng.c_str());
+        if (fxAfter < fxBefore){
+            ROS_INFO("GOOD STEP");
+
+            //std::lock_guard<std::mutex> lock(mtx);
+            _applyUpdate(keyPosesAfter, latestFrame);
+            lambda /= 10;
+            fxResult = fxAfter;
+        }
+        else{
+            ROS_INFO("BAD STEP");
+            lambda *= 10;
+            fxResult = fxBefore;
+        }
+
+        if (fxResult < fxtol) {
+            break;
+        }
     }
-    cv::transpose(matA, matAt);
-    matAtA = matAt * matA;
-    matAtB = matAt * matB;
-    cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
-    for (int k = 0; k < smoothingFrames; k++){
-        int frameID = latestFrame - smoothingFrames + k;
-        pcl::PointXYZ keyPos = cloudKeyPositions->at(frameID);
-        PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
-        
-        keyPose.x       += matX.at<float>(k*poseD + 0, 0); 
-        keyPose.y       += matX.at<float>(k*poseD + 1, 0); 
-        keyPose.z       += matX.at<float>(k*poseD + 2, 0);
-
-        keyPose.roll    += matX.at<float>(k*poseD + 3, 0); 
-        keyPose.pitch   += matX.at<float>(k*poseD + 4, 0); 
-        keyPose.yaw     += matX.at<float>(k*poseD + 5, 0); 
-        cloudKeyPoses->at(frameID) = keyPose;
-
-        keyPos.x        += matX.at<float>(k*poseD + 0, 0); 
-        keyPos.y        += matX.at<float>(k*poseD + 1, 0); 
-        keyPos.z        += matX.at<float>(k*poseD + 2, 0); 
-        cloudKeyPositions->at(frameID) = keyPos;
-    }
-    /*for (int i = 0; i < minNrOfPoints; i++){ #TODO: decide whether or not to optimize points also
-
-    }*/
     PointXYZRPY lastKeyPose = cloudKeyPoses->back();
     gtsam::Vector3 rotVec(lastKeyPose.roll, lastKeyPose.pitch, lastKeyPose.yaw);
     gtsam::Point3 trans(lastKeyPose.x, lastKeyPose.y, lastKeyPose.z);
     gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
-    currentPoseInWorld = gtsam::Pose3(orientation, trans);
+    currentPoseInWorld = gtsam::Pose3(orientation, trans) * displacement;
+    /*for (int i = 0; i < minNrOfPoints; i++){ #TODO: decide whether or not to optimize points also
+
+    }*/
     //std::cout << "norm: " << cv::norm(matX, cv::NORM_L2) << std::endl;
-    return cv::norm(matX, cv::NORM_L2);
+}
+
+void Graph::_applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame)
+{
+    for (int k = 0; k < smoothingFrames; k++){
+        int frameID = latestFrame - smoothingFrames + k;
+        cloudKeyPoses->at(frameID) = keyPoses.at(k);
+
+    }
+}
+
+void Graph::_updateIsam()
+{
+
+}
+void Graph::_evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, float &resultBefore, float &resultAfter)
+{   
+    resultBefore = 0; resultAfter = 0;
+    for (int k = 0; k < smoothingFrames; ++k){
+        PointXYZRPY keyPoseBefore = posesBefore.at(k);
+        PointXYZRPY keyPoseAfter  = posesAfter.at(k);
+
+        gtsam::Pose3 poseInWorldBefore;
+        gtsam::Pose3 poseInWorldAfter;
+        _fromPointXYZRPYToPose3(keyPoseBefore, poseInWorldBefore);
+        _fromPointXYZRPYToPose3(keyPoseAfter, poseInWorldAfter);
+        for (int j = 0; j < minNrOfPoints; j++){
+
+            auto x_wj = pointsWorld[k*minNrOfPoints + j];
+            auto x_Lj = pointsLocal[k*minNrOfPoints + j];
+
+            resultBefore += pow(gtsam::norm3(poseInWorldBefore.inverse() * x_wj - x_Lj), 2);
+            resultAfter += pow(gtsam::norm3(poseInWorldAfter.inverse() * x_wj - x_Lj), 2);
+        }
+    }
 }
 
 void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
@@ -280,11 +422,13 @@ void Graph::mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 void Graph::runOnce()
 {
     if (newLaserOdometry && newMap){
-        std::lock_guard<std::mutex> lock(mtx);
+        //std::lock_guard<std::mutex> lock(mtx);
         newLaserOdometry, newMap = false;
+        int iterCount = 0;
 
         _incrementPosition();
         _transformMapToWorld();
+        _createKeyFramesMap();
         /*if (!cloudKeyPoses->empty()){
             PointXYZRPY lastKeyPose = cloudKeyPoses->back();
             gtsam::Vector3 rotVec(lastKeyPose.roll, lastKeyPose.pitch, lastKeyPose.yaw);
@@ -292,35 +436,50 @@ void Graph::runOnce()
             gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
             currentPoseInWorld = gtsam::Pose3(orientation, trans);
         }*/
+        _smoothPoses();// #TODO: Rearrange so can be called before ISAM2
         _performIsam();
-        while (_smoothPoses() > 0.02); // #TODO: Rearrange so can be called before ISAM2
         _publishTrajectory();
         _publishTransformed();
 
     }
 }
 
+void Graph::runSmoothing(){
+    if (smoothingEnabledFlag == false) return;
+    ros::Rate rate(1);
+    while (ros::ok){
+        rate.sleep();
+        _smoothPoses();
+        _updateIsam();
+    }
+}
+
 void Graph::_transformMapToWorld(){
     pcl::PointCloud<pcl::PointXYZ> currentInWorld;
     pcl::transformPointCloud(*currentCloud, currentInWorld, currentPoseInWorld.matrix());
-    if (cloudKeyFramesMap->empty()){
-        *cloudKeyFramesMap += currentInWorld;
+    /*for (auto &it : currentInWorld.points){
+        cloudMap->addPointToCloud(it, cloudKeyFramesMap);
+    }*/
+    
+    
+    if (fullMap->empty()){
+        *fullMap += currentInWorld;
         return;
     }
-    //pcl::PointCloud<pcl::PointXYZ>::Ptr currentMap(new pcl::PointCloud<pcl::PointXYZ>(*cloudKeyFramesMap));
+    pcl::PointCloud<pcl::PointXYZ>::Ptr currentMap(new pcl::PointCloud<pcl::PointXYZ>(*fullMap));
     pcl::KdTreeFLANN<pcl::PointXYZ> kdTree;
-    kdTree.setInputCloud(cloudKeyFramesMap);
+    kdTree.setInputCloud(fullMap);
     std::vector<int> indices;
     std::vector<float> distances;
     for (auto &it : currentInWorld.points){
 
         if (kdTree.nearestKSearch(it, 1, indices, distances) > 0) {
-            if (sqrt(distances[0]) > 0.3){
-                cloudKeyFramesMap->push_back(it);
+            if (sqrt(distances[0]) > 0.5){
+                fullMap->push_back(it);
             }
         }
         else{
-            cloudKeyFramesMap->push_back(it);
+            fullMap->push_back(it);
         }
     }
     
@@ -329,7 +488,7 @@ void Graph::_transformMapToWorld(){
 void Graph::_publishTransformed(){
     if (pubTransformedMap.getNumSubscribers() > 0){
         sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(*cloudKeyFramesMap, msg);
+        pcl::toROSMsg(*fullMap, msg);
         msg.header.frame_id = "map";
         pubTransformedMap.publish(msg);
     }
@@ -369,4 +528,23 @@ void Graph::_publishTrajectory(){
         poseArray.poses.push_back(pose);
     }
     pubPoseArray.publish(poseArray);
+}
+
+void Graph::_fromPointXYZRPYToPose3(const PointXYZRPY &poseIn, gtsam::Pose3 &poseOut){
+        gtsam::Vector6 xi;
+        xi << poseIn.roll, poseIn.pitch, poseIn.yaw, poseIn.x, poseIn.y, poseIn.z;
+        poseOut = gtsam::Pose3::Expmap(xi);
+        /*gtsam::Vector3 rotVec(poseIn.roll, poseIn.pitch, poseIn.yaw);
+        gtsam::Point3 trans(poseIn.x, poseIn.y, poseIn.z);
+        gtsam::Rot3 oriLocal = gtsam::Rot3::RzRyRx(rotVec);
+        poseOut = gtsam::Pose3(oriLocal, trans);*/
+}
+
+void Graph::_fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut){
+    poseOut.x = poseIn.translation().x(); 
+    poseOut.y = poseIn.translation().y(); 
+    poseOut.z = poseIn.translation().z();
+    poseOut.roll = poseIn.rotation().roll();
+    poseOut.pitch = poseIn.rotation().pitch();
+    poseOut.yaw = poseIn.rotation().yaw();
 }
