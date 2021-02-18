@@ -12,6 +12,7 @@
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/octree/octree_search.h>
+#include <pcl/filters/voxel_grid.h>
 
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Odometry.h>
@@ -60,10 +61,11 @@ class Graph
         // Optimization parameters
         bool smoothingEnabledFlag=true;
         double voxelRes = 0.3;
-        int smoothingFrames = 5;
+        int smoothingFrames = 1;
 
-        int maxIterSmoothing = 40;
-        float fxtol = 0.05;
+        int maxIterSmoothing = 20;
+        float fxTol = 0.05;
+        double stepTol = 1e-15;
 
 
         // gtsam estimation members
@@ -73,9 +75,10 @@ class Graph
 
         gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise;
 
+        pcl::VoxelGrid<pcl::PointXYZ> downSizeFilterSurroundingKeyPoses;
         std::mutex mtx;
         pcl::PointXYZ previousPosPoint, currentPosPoint;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr currentCloud;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
@@ -92,13 +95,14 @@ class Graph
 
         void _incrementPosition();
         void _transformMapToWorld();
+        void _transformToGlobalMap(); // Adds to the octree structure and fullmap simultaneously
         void _createKeyFramesMap();
         void _performIsam();
         void _publishTrajectory();
         void _publishTransformed();
         void _fromPointXYZRPYToPose3(const PointXYZRPY &poseIn, gtsam::Pose3 &poseOut);
         void _fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut);
-        void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, float &resultBefore, float &resultAfter);
+        void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter);
         void _applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame);
         void _updateIsam();
 };
