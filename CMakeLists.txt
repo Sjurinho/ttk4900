@@ -7,7 +7,7 @@ add_compile_options(-std=c++11)
 
 # Finding the packages required (dependencies for this package)
 find_package(PCL 1.8 REQUIRED)
-find_package(GTSAM 4.0.0 REQUIRED COMPONENTS
+find_package(GTSAM REQUIRED COMPONENTS
   geometry
   nonlinear
   slam 

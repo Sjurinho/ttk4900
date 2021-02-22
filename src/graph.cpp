@@ -200,7 +200,7 @@ void Graph::_smoothPoses(){
     std::vector<gtsam::Point3> worldPoints; 
     worldPoints.reserve(minNrOfPoints*smoothingFrames);
     std::vector<gtsam::Point3> localPoints; 
-    localPoints.reserve(minNrOfPoints*smoothingFrames);
+    localPoints.reserve(minNrOfPoints*smoothingFrames); //reserve space
     for (int iter = 0; iter<maxIterSmoothing; iter++){
         worldPoints.clear(); localPoints.clear();
         cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_64FC1);
@@ -211,20 +211,18 @@ void Graph::_smoothPoses(){
         cv::Mat matX(XCols, 1, CV_64FC1, cv::Scalar::all(0));
         for (int k = 0; k < smoothingFrames; ++k){
             //#TODO: CALCULATE CORRESPONDENCES DIFFERENTLY
+            // Extract frame
             int frameID = latestFrame - smoothingFrames + k;
             pcl::PointCloud<pcl::PointXYZ> framePoints = *cloudKeyFrames[frameID];
             pcl::PointCloud<pcl::PointXYZ> frameInWorld;
             PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
-
+            
             gtsam::Pose3 poseInWorld;
             _fromPointXYZRPYToPose3(keyPose, poseInWorld);
-
-            //pcl::transformPointCloud(*fullMap, frameInWorld, poseInWorld.inverse().matrix()); //Need to use map instead
 
             pcl::transformPointCloud(framePoints, frameInWorld, poseInWorld.matrix());
             auto R_wLi = poseInWorld.rotation();
             auto t_wi  = poseInWorld.translation();
-            /*pcl::transformPointCloud(*localKeyFramesMap, frameInWorld, poseInWorld.inverse().matrix()); //Need to use map instead*/
 
             std::vector<int> indices;
             std::vector<float> distances;
@@ -232,45 +230,18 @@ void Graph::_smoothPoses(){
                 auto pointInWorld = frameInWorld.at(j);
                 auto pointInLocalFrame = framePoints.at(j);
                 if (cloudMap->nearestKSearch(pointInWorld, 1, indices, distances) > 0) {
+                    // Extract points
                     auto q_wjPCL = fullMap->at(indices[0]);
-                    //auto q_wjPCL = localKeyFramesMap->at(indices[0]);
-
                     auto q_wj = gtsam::Point3(q_wjPCL.x, q_wjPCL.y, q_wjPCL.z);
                     auto p_wj = gtsam::Point3(pointInWorld.x, pointInWorld.y, pointInWorld.z);
                     auto p_Lij = gtsam::Point3(pointInLocalFrame.x, pointInLocalFrame.y, pointInLocalFrame.z);
                     worldPoints[k*minNrOfPoints + j] = q_wj;
                     localPoints[k*minNrOfPoints + j] = p_Lij;
 
-                    /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_32F, cv::Scalar::all(0));
-                    J_hij_xwj.at<double>(0, 0) = R_wLi.transpose()(0, 0);
-                    J_hij_xwj.at<double>(0, 1) = R_wLi.transpose()(0, 1);
-                    J_hij_xwj.at<double>(0, 2) = R_wLi.transpose()(0, 2);
-                    J_hij_xwj.at<double>(1, 0) = R_wLi.transpose()(1, 0);
-                    J_hij_xwj.at<double>(1, 1) = R_wLi.transpose()(1, 1);
-                    J_hij_xwj.at<double>(1, 2) = R_wLi.transpose()(1, 2);
-                    J_hij_xwj.at<double>(2, 0) = R_wLi.transpose()(2, 0);
-                    J_hij_xwj.at<double>(2, 1) = R_wLi.transpose()(2, 1);
-                    J_hij_xwj.at<double>(2, 2) = R_wLi.transpose()(2, 2);*/
-
-                    //auto p_Lij = R_wLi.transpose() * (q_wj - t_wi);
-                    //auto p_Lij = poseInWorld.inverse() * q_wj;
-                    //auto p_Lij = p_wj;
-                    //auto tmp = skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z());
                     gtsam::Matrix3 tmp = - (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
 
+                    // Calculate Jacobians
                     auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
-                    /*J_hij_TwLi.at<double>(0, 0) = -1.0;
-                    J_hij_TwLi.at<double>(1, 1) = -1.0;
-                    J_hij_TwLi.at<double>(2, 2) = -1.0;
-                    J_hij_TwLi.at<double>(0, 3) = tmp(0, 0);
-                    J_hij_TwLi.at<double>(0, 4) = tmp(0, 1);
-                    J_hij_TwLi.at<double>(0, 5) = tmp(0, 2);
-                    J_hij_TwLi.at<double>(1, 3) = tmp(1, 0);
-                    J_hij_TwLi.at<double>(1, 4) = tmp(1, 1);
-                    J_hij_TwLi.at<double>(1, 5) = tmp(1, 2);
-                    J_hij_TwLi.at<double>(2, 3) = tmp(2, 0);
-                    J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
-                    J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);*/
                     J_hij_TwLi.at<double>(0, 0) = R_wLi.matrix()(0, 0);
                     J_hij_TwLi.at<double>(0, 1) = R_wLi.matrix()(0, 1);
                     J_hij_TwLi.at<double>(0, 2) = R_wLi.matrix()(0, 2);
@@ -290,55 +261,41 @@ void Graph::_smoothPoses(){
                     J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
                     J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
 
-                    //auto e = (poseInWorld.inverse()*q_wj) - p_wj;
-                    //auto e = (poseInWorld * p_wj) - q_wj;
                     auto e = p_wj - q_wj;
                     auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
                     b_ij.at<double>(0,0) = -e.x();
                     b_ij.at<double>(1,0) = -e.y();
                     b_ij.at<double>(2,0) = -e.z();
 
+                    // Extract submatrice to insert into
                     auto ProwRange = cv::Range(k*minNrOfPoints*pointD + pointD*j, k*minNrOfPoints*pointD + pointD*j + pointD);
-                    //auto ProwRange = cv::Range(k*minNrOfPoints*poseD + poseD*j, k*minNrOfPoints*poseD + poseD*j + poseD);
                     auto PcolRange = cv::Range(k*poseD, k*poseD + poseD);
                     //auto SrowRange = ProwRange;
                     //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
-
                     auto bColRange = cv::Range::all();
                     auto bRowRange = cv::Range(k*minNrOfPoints*pointD + j*pointD, k*minNrOfPoints*pointD + j*pointD + pointD);
                     //auto bRowRange = cv::Range(k*minNrOfPoints*poseD + j*poseD, k*minNrOfPoints*poseD + j*poseD + poseD);
 
                     cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
-
                     //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
                     cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
+
+                    // Propagate uncertainty
                     cv::Mat sigmas(6, 6, CV_64F, cv::Scalar::all(0));
                     cv::eigen2cv(odometryNoise->covariance(), sigmas);
                     cv::Mat sigmasFloat;
                     sigmas.convertTo(sigmasFloat, CV_64F);
-                    //std::cout << sigmasFloat;
-                    //cv::Mat sigmasqrt(6, 6, CV_32F, cv::Scalar::all(0));
-                    //cv::sqrt(sigmas,sigmasqrt);
-                    //cv::Mat sigmainvsqrt(6,6,CV_32F, cv::Scalar::all(0));
-                    //sigmainvsqrt = sigmasqrt.inv();
-                    //cv::Mat temp;
-                    //sigmainvsqrt.convertTo(temp, CV_32F);
+
                     cv::Mat whitener = J_hij_TwLi * sigmasFloat * J_hij_TwLi.t();
-                    //std::cout << whitener << std::endl;
                     cv::Mat whitenerInv;
                     cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
                     cv::Mat whitenerSqrtInv;
                     matrix_square_root(whitenerInv, whitenerSqrtInv);
-                    //std::cout << whitenerSqrtInv << std::endl;
-                    //cv::Mat whitenerInvSqrt = whitenerSqrt.inv();
-                    //cv::Mat Ai = whitener * J_hij_TwLi;
+
+                    // Copy into submatrices
                     cv::Mat Ai = whitenerSqrtInv * J_hij_TwLi;
-                    //std::cout << whitenerSqrtInv << std::endl;
-                    //std::cout << whitener << std::endl;
                     Ai.copyTo(PsubMatA);
-                    //cv::Mat bi = whitener * b_ij;
                     cv::Mat bi = whitenerSqrtInv * b_ij;
-                    //std::cout << bi << std::endl;
                     //J_hij_xwj.copyTo(SsubMatA);
                     bi.copyTo(bsubMatB);
                 }
@@ -479,13 +436,6 @@ void Graph::runOnce()
         //_transformMapToWorld();
         _transformToGlobalMap();
         _createKeyFramesMap();
-        /*if (!cloudKeyPoses->empty()){
-            PointXYZRPY lastKeyPose = cloudKeyPoses->back();
-            gtsam::Vector3 rotVec(lastKeyPose.roll, lastKeyPose.pitch, lastKeyPose.yaw);
-            gtsam::Point3 trans(lastKeyPose.x, lastKeyPose.y, lastKeyPose.z);
-            gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
-            currentPoseInWorld = gtsam::Pose3(orientation, trans);
-        }*/
         _smoothPoses();// #TODO: Rearrange so can be called before ISAM2
         _performIsam();
         _publishTrajectory();
