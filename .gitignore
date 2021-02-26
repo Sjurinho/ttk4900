@@ -300,3 +300,9 @@ data/*
 !data/usage.txt
 **/*__pycache__/
 __pycache__/
+
+# MATLAB
+simulator_matlab/datasets/
+simulator_matlab/*.mat
+simulator_matlab/slprj/
+simulator_matlab/deprecated/
