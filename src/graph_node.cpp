@@ -1,5 +1,6 @@
 // Node file to create object and initialising the ROS node
 #include "graph.hpp"
+#include <thread>
 
 int main(int argc, char** argv)
 {
@@ -12,7 +13,8 @@ int main(int argc, char** argv)
     
     Graph node(nh,pnh); // Creating the object
 
-    ros::Rate rate(100); // Defing the looping rate
+    ros::Rate rate(10); // Defing the looping rate
+    //std::thread smoothThread(&Graph::runSmoothing, &node);
 
     /* Looking for any interupt else it will continue looping */
     while (ros::ok())
@@ -22,5 +24,6 @@ int main(int argc, char** argv)
         node.runOnce();
         rate.sleep();
     }
+    //smoothThread.join();
     return 0;
 }

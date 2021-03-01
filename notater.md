@@ -16,3 +16,6 @@
 ## MØTE 08.02.2021 - NTNU
 
 - Preconditioning matrices for faster computation
+
+## MØTE 1.03.2021 - NTNU
+- Include uncertainty analysis in the thesis. How it develops over time, etc.

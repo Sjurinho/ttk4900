@@ -11,17 +11,21 @@
 
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/octree/octree_search.h>
+#include <pcl/filters/voxel_grid.h>
 
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Odometry.h>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam/linear/NoiseModel.h>
 //#include <gtsam/nonlinear/ISAM2Params.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/Values.h>
+
 
 // POINT TYPE FOR REGISTERING ENTIRE POSE
 struct PointXYZRPY{
@@ -42,16 +46,28 @@ class Graph
         ~Graph(); // destructor method
         void odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg);
         void mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
+        void groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void runOnce();
+        void runSmoothing();
     private:
+        void _smoothPoses();
         // ROS Members
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master
         ros::Subscriber subOdometry;
-        ros::Subscriber subMap;
+        ros::Subscriber subMap, subGroundPlane;
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
 
+
+        // Optimization parameters
+        bool smoothingEnabledFlag=true;
+        double voxelRes = 0.3;
+        int smoothingFrames = 10;
+
+        int maxIterSmoothing = 20;
+        float fxTol = 0.05;
+        double stepTol = 1e-15;
 
 
         // gtsam estimation members
@@ -61,15 +77,16 @@ class Graph
 
         gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise;
 
+        pcl::VoxelGrid<pcl::PointNormal> downSizeFilterSurroundingKeyPoses;
         std::mutex mtx;
-
         pcl::PointXYZ previousPosPoint, currentPosPoint;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr currentCloud;
+        pcl::PointCloud<pcl::PointNormal>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloudKeyFrames;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyFramesMap; //For publishing only
+        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames;
+        pcl::PointCloud<pcl::PointNormal>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
+        pcl::octree::OctreePointCloudSearch<pcl::PointNormal>::Ptr octreeMap;
 
 
         double disp[6] = { 0 }; // [roll, pitch, yaw, x, y, z]
@@ -77,13 +94,20 @@ class Graph
         gtsam::Pose3 displacement;
 
         double timeOdometry, timeMap = 0;
-        bool newLaserOdometry, newMap = false;
+        bool newLaserOdometry, newMap, newGroundPlane = false;
 
         void _incrementPosition();
+        void _lateralEstimation();
         void _transformMapToWorld();
-        float _smoothPoses();
+        void _transformToGlobalMap(); // Adds to the octree structure and fullmap simultaneously
+        void _createKeyFramesMap();
         void _performIsam();
         void _publishTrajectory();
         void _publishTransformed();
+        void _fromPointXYZRPYToPose3(const PointXYZRPY &poseIn, gtsam::Pose3 &poseOut);
+        void _fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut);
+        void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter);
+        void _applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame);
+        void _cloud2Map();
 };
 #endif

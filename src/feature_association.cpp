@@ -59,12 +59,12 @@ void FeatureAssociation::pointCloud2Handler(const sensor_msgs::PointCloud2ConstP
         newCloud=true;
 }
 
-void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &groundPlane, pcl::PointCloud<pcl::PointXYZ> &excludedGroundPlane)
+void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointNormal> &cloud, pcl::PointCloud<pcl::PointNormal> &groundPlane, pcl::PointCloud<pcl::PointNormal> &excludedGroundPlane)
 {
     // Filter to fit plane to points below the sensor
 
-    pcl::PointCloud<pcl::PointXYZ>::Ptr potentialGroundPoints(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PassThrough<pcl::PointXYZ> pass(true);
+    pcl::PointCloud<pcl::PointNormal>::Ptr potentialGroundPoints(new pcl::PointCloud<pcl::PointNormal>);
+    pcl::PassThrough<pcl::PointNormal> pass(true);
     pass.setInputCloud(cloud.makeShared());
     pass.setFilterFieldName("z");
     pass.setNegative(false);
@@ -74,7 +74,7 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
 
     pcl::IndicesConstPtr notGroundPtr = pass.getRemovedIndices();
 
-    pcl::SACSegmentation<pcl::PointXYZ> sacGroundPlane;
+    pcl::SACSegmentation<pcl::PointNormal> sacGroundPlane;
     sacGroundPlane.setInputCloud(potentialGroundPoints->makeShared());
     sacGroundPlane.setOptimizeCoefficients(true);
     sacGroundPlane.setModelType(pcl::SACMODEL_PLANE);
@@ -88,9 +88,9 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
     
     // #TODO: Extract ground plane indices relative to original cloud and output ground plane 
 
-    groundPlane = pcl::PointCloud<pcl::PointXYZ>(*potentialGroundPoints, inliers->indices);
+    groundPlane = pcl::PointCloud<pcl::PointNormal>(*potentialGroundPoints, inliers->indices);
     
-    pcl::ExtractIndices<pcl::PointXYZ> removeGroundPlaneFilter;
+    pcl::ExtractIndices<pcl::PointNormal> removeGroundPlaneFilter;
     removeGroundPlaneFilter.setInputCloud(cloud.makeShared());
     removeGroundPlaneFilter.setIndices(notGroundPtr);
     removeGroundPlaneFilter.setNegative(false);
@@ -98,34 +98,26 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointXYZ> &
 
 }
 
-void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointXYZ> &output, pcl::PointCloud<pcl::FPFHSignature33> &descriptors, float leafSize /*= 0.1*/)
+void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointNormal> &cloud, pcl::PointCloud<pcl::PointNormal> &output, pcl::PointCloud<pcl::FPFHSignature33> &descriptors)
 {      
-    float normalRadius = leafSize*2.5;
-    
-    //Calculate normals
-    pcl::PointCloud<pcl::Normal> fullCloudNormals;
-    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normalEstimator;
-    normalEstimator.setInputCloud(cloud.makeShared());
-    normalEstimator.setRadiusSearch(normalRadius);
-    normalEstimator.compute(fullCloudNormals);
 
     //Extract keypoints
-    
-    pcl::ISSKeypoint3D<pcl::PointXYZ, pcl::PointXYZ> keypointDetector; // Possible to do this after processing if you pass original cloud to setsearchsurface()
+    pcl::ISSKeypoint3D<pcl::PointNormal, pcl::PointNormal> keypointDetector; // Possible to do this after processing if you pass original cloud to setsearchsurface()
     keypointDetector.setInputCloud(cloud.makeShared());
     keypointDetector.setSalientRadius(leafSize*5);
     keypointDetector.setNonMaxRadius(leafSize*3);
     keypointDetector.setThreshold21(0.8);
     keypointDetector.setThreshold32(0.8);
-    keypointDetector.setNormals(fullCloudNormals.makeShared());
+    keypointDetector.setNormalRadius(normalRadius); //#TODO: find a way to use precalculated normals
+    //keypointDetector.setNormals(test->);
     keypointDetector.compute(output);
 
     //Calculate FPFH descriptors
     pcl::PointCloud<pcl::FPFHSignature33> fullCloudDescriptors;
-    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
-    pcl::FPFHEstimation<pcl::PointXYZ, pcl::Normal, pcl::FPFHSignature33> fpfhEstimator;
+    pcl::search::KdTree<pcl::PointNormal>::Ptr tree (new pcl::search::KdTree<pcl::PointNormal>);
+    pcl::FPFHEstimation<pcl::PointNormal, pcl::PointNormal, pcl::FPFHSignature33> fpfhEstimator;
     fpfhEstimator.setInputCloud(cloud.makeShared());
-    fpfhEstimator.setInputNormals(fullCloudNormals.makeShared());
+    fpfhEstimator.setInputNormals(cloud.makeShared());
     fpfhEstimator.setSearchMethod(tree);
     fpfhEstimator.setRadiusSearch(normalRadius*2);
     fpfhEstimator.compute(fullCloudDescriptors);
@@ -137,7 +129,7 @@ void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointXYZ> &
     keypointExtractor.filter(descriptors);
 }
 
-pcl::RangeImage FeatureAssociation::_pointCloud2RangeImage(const pcl::PointCloud<pcl::PointXYZ> &cloud)
+pcl::RangeImage FeatureAssociation::_pointCloud2RangeImage(const pcl::PointCloud<pcl::PointNormal> &cloud)
 {
     
     // SENSOR SPECIFIC
@@ -170,7 +162,7 @@ void FeatureAssociation::_warpPoints() //#TODO
     double zPrev = transformation.rotation().eulerAngles(0, 1, 2).z();
 }
 
-void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud, const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors)
+void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud, const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors)
 {   
     
     // Find correspondences
@@ -192,7 +184,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
 
-    pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointXYZ> rej;
+    pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointNormal> rej;
     rej.setInputSource(featureCloud.makeShared());
     rej.setInputTarget(_prevFeatureCloud.makeShared());
     rej.setInlierThreshold(1.5);
@@ -202,17 +194,17 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     rej.getCorrespondences(*goodCorrespondences);
 
     //Calculate transformation
-    //pcl::registration::TransformationEstimationPointToPlane<pcl::PointXYZ, pcl::PointXYZ> tEst;
-    pcl::registration::TransformationEstimation2D<pcl::PointXYZ, pcl::PointXYZ> tEst;
-    //pcl::registration::TransformationEstimationLM<pcl::PointXYZ, pcl::PointXYZ> tEst;
+    //pcl::registration::TransformationEstimationPointToPlane<pcl::PointNormal, pcl::PointNormal> tEst;
+    pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal> tEst;
+    //pcl::registration::TransformationEstimationLM<pcl::PointNormal, pcl::PointNormal> tEst;
     Eigen::Matrix4f T;
 
 
     tEst.estimateRigidTransformation(featureCloud, _prevFeatureCloud, *goodCorrespondences, T);
 
     /*Eigen::Matrix4f TFinal;
-    pcl::PointCloud<pcl::PointXYZ> alignedCloud;
-    pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> gicp;
+    pcl::PointCloud<pcl::PointNormal> alignedCloud;
+    pcl::GeneralizedIterativeClosestPoint<pcl::PointNormal, pcl::PointNormal> gicp;
     gicp.setInputSource(featureCloud.makeShared());
     gicp.setInputTarget(_prevFeatureCloud.makeShared());
     gicp.align(alignedCloud, T);
@@ -256,7 +248,7 @@ void FeatureAssociation::_publishTransformation()
 
 }
 
-void FeatureAssociation::_publishFeatureCloud(const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud)
+void FeatureAssociation::_publishFeatureCloud(const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud)
 {
     if (pubFeatureCloud2.getNumSubscribers() > 0){
         sensor_msgs::PointCloud2 msg;
@@ -274,12 +266,32 @@ void FeatureAssociation::_publishFeatureCloud(const pcl::PointCloud<pcl::PointXY
     }
 }
 
-void FeatureAssociation::_publish(const pcl::PointCloud<pcl::PointXYZ> &featureCloud, const pcl::PointCloud<pcl::PointXYZ> &groundPlaneCloud)
+void FeatureAssociation::_publish(const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud)
 {   
 
     _publishFeatureCloud(featureCloud, groundPlaneCloud);
     _publishTransformation();
 
+}
+
+void FeatureAssociation::_calculateNormals(const pcl::PointCloud<pcl::PointXYZ> &cloud, pcl::PointCloud<pcl::PointNormal> &cloudWithNormals)
+{
+    //Calculate normals
+    pcl::PointCloud<pcl::Normal> fullCloudNormals;
+    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normalEstimator;
+    normalEstimator.setInputCloud(cloud.makeShared());
+    normalEstimator.setRadiusSearch(normalRadius);
+    normalEstimator.compute(fullCloudNormals);
+
+    for (int i = 0; i < cloud.points.size(); i++){
+        pcl::PointNormal pointWithNormal;
+        pointWithNormal.x = cloud.points[i].x;
+        pointWithNormal.y = cloud.points[i].y;
+        pointWithNormal.z = cloud.points[i].z;
+        pointWithNormal.normal_x = fullCloudNormals.points[i].normal_x;
+        pointWithNormal.normal_y = fullCloudNormals.points[i].normal_y;        pointWithNormal.normal_z = fullCloudNormals.points[i].normal_z;
+        cloudWithNormals.push_back(pointWithNormal);
+    }
 }
 
 void FeatureAssociation::runOnce()
@@ -294,23 +306,26 @@ void FeatureAssociation::runOnce()
         std::vector<int> indices;
         pcl::removeNaNFromPointCloud(currentCloud, removedNansCloud, indices);
 
-        float leafSize = 0.2; // 0.1 is ait, 0.15 makes it turn less, 0.2 is pretty porn (i think that may be because it makes the point cloud less dense "close" to the sensor, since it typically is alot denser here than in the end)
         pcl::VoxelGrid<pcl::PointXYZ> voxelGridFilter;
         voxelGridFilter.setInputCloud(removedNansCloud.makeShared());
         voxelGridFilter.setLeafSize(leafSize, leafSize, leafSize);
         voxelGridFilter.filter(cloud);
 
+        pcl::PointCloud<pcl::PointNormal> cloudWithNormals;
+        _calculateNormals(cloud, cloudWithNormals);
+
+
         //std::cout << "INCLOUD\n" << cloud << std::endl;
 
-        pcl::PointCloud<pcl::PointXYZ> groundPlane;
-        pcl::PointCloud<pcl::PointXYZ> excludedGroundPlane;
-        _findGroundPlane(cloud, groundPlane, excludedGroundPlane);
+        pcl::PointCloud<pcl::PointNormal> groundPlane;
+        pcl::PointCloud<pcl::PointNormal> excludedGroundPlane;
+        _findGroundPlane(cloudWithNormals, groundPlane, excludedGroundPlane);
         //std::cout << "EXCLUDED GROUND PLANE\n" << excludedGroundPlane << std::endl;
         //std::cout << "GROUND PLANE\n" << groundPlane << std::endl;  
 
-        pcl::PointCloud<pcl::PointXYZ> featureCloud;
+        pcl::PointCloud<pcl::PointNormal> featureCloud;
         pcl::PointCloud<pcl::FPFHSignature33> featureDescriptors;
-        _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors, leafSize);
+        _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors);
         //std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
         //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
 
