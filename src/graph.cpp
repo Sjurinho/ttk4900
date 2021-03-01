@@ -49,7 +49,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     isam = new gtsam::ISAM2(parameters);
 
     gtsam::Vector6 Sigmas(6);
-    Sigmas << 1, 1, 1e-1, 1e-1, 1e-1, 1; 
+    Sigmas << 1, 1, 1e-2, 1e-2, 1e-2, 1; 
 
     cloudKeyPositions.reset(new pcl::PointCloud<pcl::PointXYZ>());
     currentFeatureCloud.reset(new pcl::PointCloud<pcl::PointNormal>());
@@ -461,7 +461,21 @@ void Graph::_cloud2Map(){
 
     if (cloudKeyFrames.size() < 1) return;
 
-    int nPoints = currentFeatureCloud->points.size();
+    pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
+    pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal> matcher;
+
+    pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
+    pcl::PointCloud<pcl::PointNormal> frameInWorld;
+
+    pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
+
+    matcher.setInputSource(frameInWorld.makeShared());
+    matcher.setInputTarget(cloudMapFull);
+    matcher.determineReciprocalCorrespondences(*allCorrespondences);  
+
+    std::cout << "Correspondences: " << allCorrespondences->size() << std::endl;
+
+    int nPoints = allCorrespondences->size();
     int pointD = 3; int poseD = 6;
     int ARows = nPoints*pointD;
     int BRows = ARows;
@@ -480,92 +494,89 @@ void Graph::_cloud2Map(){
         cv::Mat matB(BRows, 1, CV_64FC1, cv::Scalar::all(0));
         cv::Mat matAtB(ACols, 1, CV_64FC1, cv::Scalar::all(0));
         cv::Mat matX(XCols, 1, CV_64FC1, cv::Scalar::all(0));
-        pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
-        pcl::PointCloud<pcl::PointNormal> frameInWorld;
 
-        pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
         auto R_wLi = currentPoseInWorld.rotation();
         auto t_wi  = currentPoseInWorld.translation();
 
-        std::vector<int> indices;
-        std::vector<float> distances;
         for (int j = 0; j < nPoints; j++){
-            auto pointInWorld = frameInWorld.at(j);
-            auto pointInLocalFrame = framePoints.at(j);
+            int sourceIndex = allCorrespondences->at(j).index_query;
+            int targetIndex = allCorrespondences->at(j).index_match;
+            pcl::PointNormal pointInWorld = frameInWorld.at(sourceIndex);
+            pcl::PointNormal pointInLocalFrame = framePoints.at(sourceIndex);
+            pcl::PointNormal matchedPointMap = cloudMapFull->at(targetIndex);
             //#TODO: Extract points first, then do optimization?
-            if (octreeMap->nearestKSearch(pointInWorld, 1, indices, distances) > 0) {
-                // Extract points
-                auto q_wjPCL = cloudMapFull->at(indices[0]);
-                auto q_wj = gtsam::Point3(q_wjPCL.x, q_wjPCL.y, q_wjPCL.z);
-                auto p_wj = gtsam::Point3(pointInWorld.x, pointInWorld.y, pointInWorld.z);
-                auto p_Lij = gtsam::Point3(pointInLocalFrame.x, pointInLocalFrame.y, pointInLocalFrame.z);
-                worldPoints[j] = q_wj;
-                localPoints[j] = p_Lij;
 
-                gtsam::Matrix3 tmp = - (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
+            // Extract points
+            auto q_wj = gtsam::Point3(matchedPointMap.x, matchedPointMap.y, matchedPointMap.z);
+            auto p_wj = gtsam::Point3(pointInWorld.x, pointInWorld.y, pointInWorld.z);
+            auto p_Lij = gtsam::Point3(pointInLocalFrame.x, pointInLocalFrame.y, pointInLocalFrame.z);
 
-                // Calculate Jacobians
-                auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
-                /*J_hij_TwLi.at<double>(0, 0) = R_wLi.matrix()(0, 0);
-                J_hij_TwLi.at<double>(0, 1) = R_wLi.matrix()(0, 1);
-                J_hij_TwLi.at<double>(0, 2) = R_wLi.matrix()(0, 2);
-                J_hij_TwLi.at<double>(1, 0) = R_wLi.matrix()(1, 0);
-                J_hij_TwLi.at<double>(1, 1) = R_wLi.matrix()(1, 1);
-                J_hij_TwLi.at<double>(1, 2) = R_wLi.matrix()(1, 2);
-                J_hij_TwLi.at<double>(2, 0) = R_wLi.matrix()(2, 0);
-                J_hij_TwLi.at<double>(2, 1) = R_wLi.matrix()(2, 1);
-                J_hij_TwLi.at<double>(2, 2) = R_wLi.matrix()(2, 2);*/
-                J_hij_TwLi.at<double>(0, 0) = 1;
-                J_hij_TwLi.at<double>(1, 1) = 1;
-                J_hij_TwLi.at<double>(2, 2) = 1;
-                J_hij_TwLi.at<double>(0, 3) = tmp(0, 0);
-                J_hij_TwLi.at<double>(0, 4) = tmp(0, 1);
-                J_hij_TwLi.at<double>(0, 5) = tmp(0, 2);
-                J_hij_TwLi.at<double>(1, 3) = tmp(1, 0);
-                J_hij_TwLi.at<double>(1, 4) = tmp(1, 1);
-                J_hij_TwLi.at<double>(1, 5) = tmp(1, 2);
-                J_hij_TwLi.at<double>(2, 3) = tmp(2, 0);
-                J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
-                J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
+            worldPoints[j] = q_wj;
+            localPoints[j] = p_Lij;
 
-                auto e = p_wj - q_wj;
-                auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
-                b_ij.at<double>(0,0) = -e.x();
-                b_ij.at<double>(1,0) = -e.y();
-                b_ij.at<double>(2,0) = -e.z();
+            gtsam::Matrix3 tmp = - (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
 
-                // Extract submatrice to insert into
-                auto ProwRange = cv::Range(pointD*j, pointD*j + pointD);
-                auto PcolRange = cv::Range::all();
-                //auto SrowRange = ProwRange; 
-                //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
-                auto bColRange = cv::Range::all();
-                auto bRowRange = cv::Range(j*pointD, j*pointD + pointD);
-                //auto bRowRange = cv::Range(k*nPoints*poseD + j*poseD, k*nPoints*poseD + j*poseD + poseD);
+            // Calculate Jacobians
+            auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
+            J_hij_TwLi.at<double>(0, 0) = R_wLi.matrix()(0, 0);
+            J_hij_TwLi.at<double>(0, 1) = R_wLi.matrix()(0, 1);
+            J_hij_TwLi.at<double>(0, 2) = R_wLi.matrix()(0, 2);
+            J_hij_TwLi.at<double>(1, 0) = R_wLi.matrix()(1, 0);
+            J_hij_TwLi.at<double>(1, 1) = R_wLi.matrix()(1, 1);
+            J_hij_TwLi.at<double>(1, 2) = R_wLi.matrix()(1, 2);
+            J_hij_TwLi.at<double>(2, 0) = R_wLi.matrix()(2, 0);
+            J_hij_TwLi.at<double>(2, 1) = R_wLi.matrix()(2, 1);
+            J_hij_TwLi.at<double>(2, 2) = R_wLi.matrix()(2, 2);
+            /*J_hij_TwLi.at<double>(0, 0) = 1;
+            J_hij_TwLi.at<double>(1, 1) = 1;
+            J_hij_TwLi.at<double>(2, 2) = 1;*/
+            J_hij_TwLi.at<double>(0, 3) = tmp(0, 0);
+            J_hij_TwLi.at<double>(0, 4) = tmp(0, 1);
+            J_hij_TwLi.at<double>(0, 5) = tmp(0, 2);
+            J_hij_TwLi.at<double>(1, 3) = tmp(1, 0);
+            J_hij_TwLi.at<double>(1, 4) = tmp(1, 1);
+            J_hij_TwLi.at<double>(1, 5) = tmp(1, 2);
+            J_hij_TwLi.at<double>(2, 3) = tmp(2, 0);
+            J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
+            J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
 
-                cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
-                //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
-                cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
+            auto e = p_wj - q_wj;
+            auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
+            b_ij.at<double>(0,0) = -e.x();
+            b_ij.at<double>(1,0) = -e.y();
+            b_ij.at<double>(2,0) = -e.z();
 
-                // Propagate uncertainty
-                cv::Mat sigmas(6, 6, CV_64F, cv::Scalar::all(0));
-                cv::eigen2cv(odometryNoise->covariance(), sigmas);
-                cv::Mat sigmasFloat;
-                sigmas.convertTo(sigmasFloat, CV_64F);
+            // Extract submatrice to insert into
+            auto ProwRange = cv::Range(pointD*j, pointD*j + pointD);
+            auto PcolRange = cv::Range::all();
+            //auto SrowRange = ProwRange; 
+            //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
+            auto bColRange = cv::Range::all();
+            auto bRowRange = cv::Range(j*pointD, j*pointD + pointD);
+            //auto bRowRange = cv::Range(k*nPoints*poseD + j*poseD, k*nPoints*poseD + j*poseD + poseD);
 
-                cv::Mat whitener = J_hij_TwLi * sigmasFloat * J_hij_TwLi.t();
-                cv::Mat whitenerInv;
-                cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
-                cv::Mat whitenerSqrtInv;
-                matrix_square_root(whitenerInv, whitenerSqrtInv);
+            cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
+            //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
+            cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
 
-                // Copy into submatrices
-                cv::Mat Ai = whitenerSqrtInv * J_hij_TwLi;
-                Ai.copyTo(PsubMatA);
-                cv::Mat bi = whitenerSqrtInv * b_ij;
-                //J_hij_xwj.copyTo(SsubMatA);
-                bi.copyTo(bsubMatB);
-            }
+            // Propagate uncertainty
+            cv::Mat sigmas(6, 6, CV_64F, cv::Scalar::all(0));
+            cv::eigen2cv(odometryNoise->covariance(), sigmas);
+            cv::Mat sigmasFloat;
+            sigmas.convertTo(sigmasFloat, CV_64F);
+
+            cv::Mat whitener = J_hij_TwLi * sigmasFloat * J_hij_TwLi.t();
+            cv::Mat whitenerInv;
+            cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
+            cv::Mat whitenerSqrtInv;
+            matrix_square_root(whitenerInv, whitenerSqrtInv);
+
+            // Copy into submatrices
+            cv::Mat Ai = whitenerSqrtInv * J_hij_TwLi;
+            Ai.copyTo(PsubMatA);
+            cv::Mat bi = whitenerSqrtInv * b_ij;
+            //J_hij_xwj.copyTo(SsubMatA);
+            bi.copyTo(bsubMatB);
         }
         cv::transpose(matA, matAt);
         matAtA = matAt * matA;
