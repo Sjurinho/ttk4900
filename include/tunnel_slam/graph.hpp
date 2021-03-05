@@ -6,6 +6,7 @@
 
 #include <mutex>
 #include <vector>
+#include <deque>
 
 #include <ros/ros.h> // including the ros header file
 
@@ -15,6 +16,7 @@
 #include <pcl/filters/voxel_grid.h>
 
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
 
 #include <gtsam/geometry/Pose3.h>
@@ -25,6 +27,8 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/Values.h>
+#include <gtsam/navigation/ImuFactor.h>
+#include <gtsam/navigation/CombinedImuFactor.h>
 
 
 // POINT TYPE FOR REGISTERING ENTIRE POSE
@@ -47,6 +51,8 @@ class Graph
         void odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg);
         void mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
+        void imuHandler(const sensor_msgs::ImuConstPtr &imuMsg);
+
         void runOnce();
         void runSmoothing();
     private:
@@ -55,13 +61,13 @@ class Graph
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master
         ros::Subscriber subOdometry;
         ros::Subscriber subMap, subGroundPlane;
+        ros::Subscriber subImu;
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
 
-
         // Optimization parameters
-        bool smoothingEnabledFlag=true;
+        bool smoothingEnabledFlag=false;
         double voxelRes = 0.3;
         int smoothingFrames = 10;
 
@@ -75,7 +81,10 @@ class Graph
         gtsam::Values initialEstimate, isamCurrentEstimate;
         gtsam::ISAM2* isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise;
+
+        gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
+
 
         pcl::VoxelGrid<pcl::PointNormal> downSizeFilterSurroundingKeyPoses;
         std::mutex mtx;
@@ -93,8 +102,13 @@ class Graph
         gtsam::Pose3 currentPoseInWorld, lastPoseInWorld = gtsam::Pose3::identity();
         gtsam::Pose3 displacement;
 
-        double timeOdometry, timeMap = 0;
-        bool newLaserOdometry, newMap, newGroundPlane = false;
+        std::shared_ptr<gtsam::PreintegrationType> preintegrated;
+        gtsam::NavState prevImuState, predImuState;
+        gtsam::imuBias::ConstantBias prevImuBias;
+        std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements;
+
+        double timeOdometry, timeMap, timePrevPreintegratedImu = 0;
+        bool newLaserOdometry, newMap, newGroundPlane, newImu, updateImu = false;
 
         void _incrementPosition();
         void _lateralEstimation();
@@ -109,5 +123,7 @@ class Graph
         void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter);
         void _applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame);
         void _cloud2Map();
+        void _initializePreintegration();
+        void _preintegrateImuMeasurements();
 };
 #endif
