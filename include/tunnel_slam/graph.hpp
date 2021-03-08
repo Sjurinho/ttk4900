@@ -125,5 +125,6 @@ class Graph
         void _cloud2Map();
         void _initializePreintegration();
         void _preintegrateImuMeasurements();
+        void _processIMU();
 };
 #endif

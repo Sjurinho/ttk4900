@@ -155,6 +155,7 @@ void Graph::_incrementPosition()
 }
 
 void Graph::_initializePreintegration(){
+    ROS_INFO("IMU DETECTED - INITIALIZING");
     gtsam::Vector3 priorVelocity = gtsam::Vector3::Zero();
     gtsam::imuBias::ConstantBias priorBias; //Assumed 0 initial bias
     _graph.add(gtsam::PriorFactor<gtsam::Vector3>(V(0), priorVelocity, imuVelocityNoise));
@@ -165,33 +166,27 @@ void Graph::_initializePreintegration(){
 
     prevImuState = gtsam::NavState(currentPoseInWorld, priorVelocity);
     predImuState = prevImuState;
+    updateImu = true;
 }
 
 void Graph::_preintegrateImuMeasurements(){
     uint64_t index = cloudKeyPositions->points.size();
     int measurements = imuMeasurements.size();
+    //int i = 0;
     for (int i = 0; i < measurements; i++){
         std::pair<double, gtsam::Vector6> measurementWithStamp = imuMeasurements[i];
-        std::cout << "measurementWithStamp: " << measurementWithStamp.first << " timePrev:" << timePrevPreintegratedImu << " TimeOdometry: "<< timeOdometry << std::endl;
-        if (measurementWithStamp.first < timeOdometry){
+        //std::cout << "measurementWithStamp: " << measurementWithStamp.first << " timePrev:" << timePrevPreintegratedImu << " TimeOdometry: "<< timeOdometry << std::endl;
+        if (measurementWithStamp.first <= timeOdometry){
             double dt = measurementWithStamp.first - timePrevPreintegratedImu;
             preintegrated->integrateMeasurement(measurementWithStamp.second.head<3>(), measurementWithStamp.second.tail<3>(), dt);
             timePrevPreintegratedImu = measurementWithStamp.first;
             imuMeasurements.pop_front();
-            //std::cout << i << std::endl;
-            //std::cout << measurementWithStamp.second << std::endl;
+            i--;
         }
         else break;
-        //std::cout << *preintegrated << std::endl;
     }
-    auto preintImuCombined = 
-    dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
-    gtsam::CombinedImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
-    _graph.add(imuFactor);
 
     predImuState = preintegrated->predict(prevImuState, prevImuBias);
-    initialEstimate.insert(V(index), predImuState.v());
-    initialEstimate.insert(B(index), prevImuBias);
     //std::cout << predImuState.pose() << std::endl;
 
     newImu = false;
@@ -211,8 +206,7 @@ void Graph::_performIsam()
         saveThisKeyFrame = false;
     }
 
-    if (saveThisKeyFrame == false && !cloudKeyPositions->points.empty())
-        	return;
+    if (saveThisKeyFrame == false && !cloudKeyPositions->points.empty()) return;
 
     //ROS_INFO("SAVING NEW KEY FRAME");
     previousPosPoint = currentPosPoint;
@@ -225,13 +219,18 @@ void Graph::_performIsam()
 
         lastPoseInWorld = currentPoseInWorld;
 
-        _initializePreintegration();
+        //_initializePreintegration();
     }
     else{
         _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(index-1), X(index), lastPoseInWorld.between(currentPoseInWorld), odometryNoise));
         initialEstimate.insert(X(index), currentPoseInWorld);
-        if (newImu){
-            _preintegrateImuMeasurements();
+        if (updateImu){
+            auto preintImuCombined = 
+            dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
+            gtsam::CombinedImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
+            _graph.add(imuFactor);
+            initialEstimate.insert(V(index), predImuState.v());
+            initialEstimate.insert(B(index), prevImuBias);
         }
     }
 
@@ -250,6 +249,7 @@ void Graph::_performIsam()
         prevImuState = gtsam::NavState(isamCurrentEstimate.at<gtsam::Pose3>(X(index)), isamCurrentEstimate.at<gtsam::Vector3>(V(index)));
         prevImuBias = isamCurrentEstimate.at<gtsam::imuBias::ConstantBias>(B(index));
         preintegrated->resetIntegrationAndSetBias(prevImuBias);
+        updateImu=false;
     }
 
     currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(X(index));
@@ -598,7 +598,12 @@ void Graph::_cloud2Map(){
     pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
     pcl::PointCloud<pcl::PointNormal> frameInWorld;
 
-    pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
+    if (updateImu){
+        pcl::transformPointCloud(framePoints, frameInWorld, predImuState.pose().matrix());
+    }
+    else{
+        pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
+    }
 
     matcher.setInputSource(frameInWorld.makeShared());
     matcher.setInputTarget(cloudMapFull);
@@ -768,19 +773,40 @@ void Graph::_cloud2Map(){
 void Graph::runOnce()
 {
     if (newLaserOdometry && newMap && newGroundPlane){
-        std::lock_guard<std::mutex> lock(mtx);
+        mtx.lock();
         newLaserOdometry, newMap, newGroundPlane = false;
 
         _incrementPosition();
+        // #TODO: PROCESS IMU
+
+        _processIMU(); 
         //_transformMapToWorld();
         //_lateralEstimation();
-        _createKeyFramesMap();
+        //_createKeyFramesMap();
+
         _cloud2Map();
+        
         _transformToGlobalMap();
-        //_smoothPoses();
+
         _performIsam();
+        mtx.unlock();
+        
         _publishTrajectory();
+        
         _publishTransformed();
+    }
+}
+
+void Graph::_processIMU(){
+    if (cloudKeyPositions->points.empty() && newImu){
+        _initializePreintegration();
+        newImu = false;
+        return;
+    }
+
+    if(newImu){
+        _preintegrateImuMeasurements();
+        currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
     }
 }
 
