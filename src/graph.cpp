@@ -4,6 +4,8 @@
 #include <pcl/search/kdtree.h>
 #include <pcl/octree/octree_pointcloud_changedetector.h>
 #include <pcl/registration/correspondence_estimation.h>
+#include <pcl/registration/correspondence_rejection_trimmed.h>
+
 
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseArray.h>
@@ -91,7 +93,9 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     gtsam::Vector6 Sigmas(6);
     Sigmas << 0.05, 0.05, 1e-3, 1e-2, 1e-2, 0.8; // rad, rad, rad, m, m, m
     gtsam::Vector6 imuSigmas(6);
-    Sigmas << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5; // rad, rad, rad, m, m, m
+    imuSigmas << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5; // rad, rad, rad, m, m, m
+    gtsam::Vector3 structureSigmas(3);
+    structureSigmas << 0.2, 0.2 ,0.2; //m, m, m
 
     cloudKeyPositions.reset(new pcl::PointCloud<pcl::PointXYZ>());
     currentFeatureCloud.reset(new pcl::PointCloud<pcl::PointNormal>());
@@ -109,6 +113,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     imuPoseNoise = gtsam::noiseModel::Diagonal::Variances(imuSigmas);
     imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.1); // m/s
     imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
+    structureNoise = gtsam::noiseModel::Diagonal::Variances(structureSigmas);
 
     gtsam::imuBias::ConstantBias priorImuBias; //assumed zero
 
@@ -127,7 +132,9 @@ void Graph::_transformToGlobalMap()
 {   
 
     pcl::PointCloud<pcl::PointNormal> currentInWorld;
+
     pcl::transformPointCloud(*currentFeatureCloud, currentInWorld, currentPoseInWorld.matrix());
+    
     std::vector<int> newPointIdxVector;
     pcl::octree::OctreePointCloudChangeDetector<pcl::PointNormal> changeDetector(voxelRes);
     changeDetector.setInputCloud(cloudMapFull);
@@ -595,6 +602,12 @@ void Graph::_cloud2Map(){
     pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal> matcher;
 
+    pcl::CorrespondencesPtr partialOverlapCorrespondences(new pcl::Correspondences);
+    pcl::registration::CorrespondenceRejectorTrimmed trimmer;
+    trimmer.setInputCorrespondences(allCorrespondences);
+    trimmer.setOverlapRatio(0.4);
+
+
     pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
     pcl::PointCloud<pcl::PointNormal> frameInWorld;
 
@@ -607,15 +620,16 @@ void Graph::_cloud2Map(){
 
     matcher.setInputSource(frameInWorld.makeShared());
     matcher.setInputTarget(cloudMapFull);
-    matcher.determineReciprocalCorrespondences(*allCorrespondences);  
+    matcher.determineReciprocalCorrespondences(*allCorrespondences); 
+    trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
-    //std::cout << "Correspondences: " << allCorrespondences->size() << std::endl;
+    std::cout << "Correspondences: " << partialOverlapCorrespondences->size() << std::endl;
 
-    int nPoints = allCorrespondences->size();
-    int pointD = 3; int poseD = 6;
-    int ARows = nPoints*pointD;
+    int nPoints = partialOverlapCorrespondences->size();
+    int pointD = 3; int poseD = 6; int priorD = 6;
+    int ARows = nPoints*pointD;// + priorD;
     int BRows = ARows;
-    int ACols = poseD; //+ pointD*nPoints;
+    int ACols = poseD;// + pointD*nPoints;
     int XCols = ACols;
     double lambda = 1e-4;
     std::vector<gtsam::Point3> worldPoints; 
@@ -635,8 +649,8 @@ void Graph::_cloud2Map(){
         auto t_wi  = currentPoseInWorld.translation();
 
         for (int j = 0; j < nPoints; j++){
-            int sourceIndex = allCorrespondences->at(j).index_query;
-            int targetIndex = allCorrespondences->at(j).index_match;
+            int sourceIndex = partialOverlapCorrespondences->at(j).index_query;
+            int targetIndex = partialOverlapCorrespondences->at(j).index_match;
             pcl::PointNormal pointInWorld = frameInWorld.at(sourceIndex);
             pcl::PointNormal pointInLocalFrame = framePoints.at(sourceIndex);
             pcl::PointNormal matchedPointMap = cloudMapFull->at(targetIndex);
@@ -676,6 +690,17 @@ void Graph::_cloud2Map(){
             J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
             J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
 
+            /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_64F, cv::Scalar::all(0));
+            J_hij_xwj.at<double>(0, 0) = R_wLi.matrix()(0, 0);
+            J_hij_xwj.at<double>(0, 1) = R_wLi.matrix()(0, 1);
+            J_hij_xwj.at<double>(0, 2) = R_wLi.matrix()(0, 2);
+            J_hij_xwj.at<double>(1, 0) = R_wLi.matrix()(1, 0);
+            J_hij_xwj.at<double>(1, 1) = R_wLi.matrix()(1, 1);
+            J_hij_xwj.at<double>(1, 2) = R_wLi.matrix()(1, 2);
+            J_hij_xwj.at<double>(2, 0) = R_wLi.matrix()(2, 0);
+            J_hij_xwj.at<double>(2, 1) = R_wLi.matrix()(2, 1);
+            J_hij_xwj.at<double>(2, 2) = R_wLi.matrix()(2, 2);*/
+
             auto e = p_wj - q_wj;
             auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
             b_ij.at<double>(0,0) = -e.x();
@@ -684,9 +709,9 @@ void Graph::_cloud2Map(){
 
             // Extract submatrice to insert into
             auto ProwRange = cv::Range(pointD*j, pointD*j + pointD);
-            auto PcolRange = cv::Range::all();
+            auto PcolRange = cv::Range(0, poseD);
             //auto SrowRange = ProwRange; 
-            //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
+            //auto ScolRange = cv::Range(poseD + pointD*j, poseD + pointD*j + pointD);
             auto bColRange = cv::Range::all();
             auto bRowRange = cv::Range(j*pointD, j*pointD + pointD);
             //auto bRowRange = cv::Range(k*nPoints*poseD + j*poseD, k*nPoints*poseD + j*poseD + poseD);
@@ -696,12 +721,18 @@ void Graph::_cloud2Map(){
             cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
 
             // Propagate uncertainty
-            cv::Mat sigmas(6, 6, CV_64F, cv::Scalar::all(0));
-            cv::eigen2cv(odometryNoise->covariance(), sigmas);
-            cv::Mat sigmasFloat;
-            sigmas.convertTo(sigmasFloat, CV_64F);
+            cv::Mat sigmasPose(6, 6, CV_64F, cv::Scalar::all(0));
+            cv::eigen2cv(odometryNoise->covariance(), sigmasPose);
+            cv::Mat sigmasPoseFloat;
+            sigmasPose.convertTo(sigmasPoseFloat, CV_64F);
 
-            cv::Mat whitener = J_hij_TwLi * sigmasFloat * J_hij_TwLi.t();
+            /*cv::Mat sigmasPoints(3, 3, CV_64F, cv::Scalar::all(0));
+            cv::eigen2cv(structureNoise->covariance(), sigmasPoints);
+            cv::Mat sigmasPointsFloat;
+            sigmasPoints.convertTo(sigmasPointsFloat, CV_64F);*/
+
+            cv::Mat whitener = J_hij_TwLi * sigmasPoseFloat * J_hij_TwLi.t();
+            //                    + J_hij_xwj * sigmasPoints * J_hij_xwj.t();
             cv::Mat whitenerInv;
             cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
             cv::Mat whitenerSqrtInv;
@@ -710,17 +741,33 @@ void Graph::_cloud2Map(){
             // Copy into submatrices
             cv::Mat Ai = whitenerSqrtInv * J_hij_TwLi;
             Ai.copyTo(PsubMatA);
+
             cv::Mat bi = whitenerSqrtInv * b_ij;
-            //J_hij_xwj.copyTo(SsubMatA);
             bi.copyTo(bsubMatB);
+
+            //cv::Mat Si = whitenerSqrtInv * J_hij_xwj;
+            //Si.copyTo(SsubMatA);
         }
+        // Add prior
+        /*cv::Mat priorMatA = matA.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD)).colRange(cv::Range(0, poseD));
+        cv::setIdentity(priorMatA);
+        cv::Mat priorMatB = matB.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD));
+        gtsam::Vector6 prior = - gtsam::Pose3::Logmap(predImuState.pose().inverse() * currentPoseInWorld);
+
+        priorMatB.at<double>(0, 0) = prior(0);
+        priorMatB.at<double>(1, 0) = prior(1);
+        priorMatB.at<double>(2, 0) = prior(2);
+        priorMatB.at<double>(3, 0) = prior(3);
+        priorMatB.at<double>(4, 0) = prior(4);
+        priorMatB.at<double>(5, 0) = prior(5);*/
+
         cv::transpose(matA, matAt);
         matAtA = matAt * matA;
         auto matAtAdiag = cv::Mat::diag(matAtA.diag());
         matAtB = matAt * matB;
         cv::solve(matAtA + (lambda * matAtAdiag), matAtB, matX, cv::DECOMP_QR);
 
-        //std::cout << cv::norm(matX, 2) << std::endl;
+        //std::cout << matA << std::endl;
 
         // Check Update
         pcl::PointXYZ oldKeyPos = currentPosPoint;
@@ -728,6 +775,7 @@ void Graph::_cloud2Map(){
 
         gtsam::Vector6 xi;
         xi << matX.at<double>(3, 0), matX.at<double>(4, 0), matX.at<double>(5, 0), matX.at<double>(0, 0), matX.at<double>(1, 0), matX.at<double>(2, 0);
+        std::cout << cv::norm(matX) << std::endl;
 
         gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
 
@@ -738,17 +786,30 @@ void Graph::_cloud2Map(){
         double fxResult = 0;
 
         for (int i = 0; i < nPoints; i++){
-            auto q_wj = worldPoints[i];
-            auto p_Lij = localPoints[i];
+            //gtsam::Point3 pointCorrection = gtsam::Point3(matX.at<double>(poseD + pointD * i, 0), matX.at<double>(poseD + pointD * i + 1, 0), matX.at<double>(poseD + pointD * i + 2, 0));
+            gtsam::Point3 q_wj = worldPoints[i];
+            gtsam::Point3 p_Lij = localPoints[i];
 
             fxBefore += pow(gtsam::norm3(keyPoseBefore * p_Lij - q_wj), 2);
+            //fxAfter += pow(gtsam::norm3(keyPoseAfter * (p_Lij + pointCorrection) - q_wj), 2);
             fxAfter += pow(gtsam::norm3(keyPoseAfter * p_Lij - q_wj), 2);
         }
         auto streng = "BEFORE: " + std::to_string(fxBefore) + ", AFTER: " + std::to_string(fxAfter);
-        //std::cout << streng << std::endl;
+        std::cout << streng << std::endl;
         if (fxAfter < fxBefore){
-            //ROS_INFO("GOOD STEP");
+            ROS_INFO("GOOD STEP");
             //std::lock_guard<std::mutex> lock(mtx);
+            /*for (int i = 0; i < nPoints; i++){ 
+                int sourceIndex = allCorrespondences->at(i).index_query;
+                //std::cout << "BEFORE UPDATE: " << currentFeatureCloud->at(sourceIndex) << std::endl;
+                framePoints.at(sourceIndex).x += matX.at<double>(poseD + pointD * i, 0);
+                framePoints.at(sourceIndex).y += matX.at<double>(poseD + pointD * i + 1, 0);
+                framePoints.at(sourceIndex).z += matX.at<double>(poseD + pointD * i + 2, 0);
+                currentFeatureCloud->at(sourceIndex).x += matX.at<double>(poseD + pointD * i, 0);
+                currentFeatureCloud->at(sourceIndex).y += matX.at<double>(poseD + pointD * i + 1, 0);
+                currentFeatureCloud->at(sourceIndex).z += matX.at<double>(poseD + pointD * i + 2, 0);
+                //std::cout << "AFTER UPDATE: " << currentFeatureCloud->at(sourceIndex) << std::endl;
+            }*/
             currentPoseInWorld = keyPoseAfter;
             lambda /= 10;
             fxResult = fxAfter;
@@ -759,7 +820,7 @@ void Graph::_cloud2Map(){
             fxResult = fxBefore;
         }
 
-        if (fxResult < fxTol || cv::norm(matX, 2) < stepTol) {
+        if (fxResult < fxTol || cv::norm(matX) < stepTol) {
             break;
         }
     }
@@ -884,7 +945,10 @@ void Graph::_publishTrajectory()
     geometry_msgs::PoseArray poseArray;
     poseArray.header.stamp = ros::Time::now();
     poseArray.header.frame_id = "map";
-    for (auto &it : *cloudKeyPoses){
+    int poses = cloudKeyPoses->points.size();
+    for (int i = 0; i<poses; i++){
+        PointXYZRPY it;
+        _fromPose3ToPointXYZRPY(isamCurrentEstimate.at<gtsam::Pose3>(X(i)), it);
         geometry_msgs::Pose pose;
         pose.position.x = it.x;
         pose.position.y = it.y;

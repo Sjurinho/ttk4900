@@ -71,9 +71,9 @@ class Graph
         double voxelRes = 0.3;
         int smoothingFrames = 10;
 
-        int maxIterSmoothing = 20;
+        int maxIterSmoothing = 10;
         float fxTol = 0.05;
-        double stepTol = 1e-15;
+        double stepTol = 1e-5;
 
 
         // gtsam estimation members
@@ -81,7 +81,7 @@ class Graph
         gtsam::Values initialEstimate, isamCurrentEstimate;
         gtsam::ISAM2* isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
