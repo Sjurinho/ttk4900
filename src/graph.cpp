@@ -9,6 +9,7 @@
 
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <tf/transform_datatypes.h>
 
 #include <gtsam/inference/Symbol.h>
@@ -34,14 +35,14 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.002;
-  double gyro_noise_sigma = 5e-05;
-  double accel_bias_rw_sigma = 0.004;
-  double gyro_bias_rw_sigma = 1e-4;
+  double accel_noise_sigma = 0.06;
+  double gyro_noise_sigma = 5e-03;
+  double accel_bias_rw_sigma = 0.04;
+  double gyro_bias_rw_sigma = 1e-3;
   gtsam::Matrix33 measured_acc_cov = gtsam::I_3x3 * pow(accel_noise_sigma, 2);
   gtsam::Matrix33 measured_omega_cov = gtsam::I_3x3 * pow(gyro_noise_sigma, 2);
   gtsam::Matrix33 integration_error_cov =
-      gtsam::I_3x3 * 1e-8;  // error committed in integrating position from velocities
+      gtsam::I_3x3 * 1e-5;  // error committed in integrating position from velocities
   gtsam::Matrix33 bias_acc_cov = gtsam::I_3x3 * pow(accel_bias_rw_sigma, 2);
   gtsam::Matrix33 bias_omega_cov = gtsam::I_3x3 * pow(gyro_bias_rw_sigma, 2);
   gtsam::Matrix66 bias_acc_omega_int =
@@ -81,7 +82,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     subGroundPlane = nh.subscribe<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32, &Graph::groundPlaneHandler, this);
     subImu = nh.subscribe<sensor_msgs::Imu>("/imu", 32, &Graph::imuHandler, this);
     pubTransformedMap = nh.advertise<sensor_msgs::PointCloud2>("/map", 1);
-    pubTransformedPose = nh.advertise<geometry_msgs::PoseStamped>("/pose", 1);
+    pubTransformedPose = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/pose", 1);
     pubPoseArray = nh.advertise<geometry_msgs::PoseArray>("/poseArray", 1);
     
     //Initializing and allocation of memory
@@ -91,7 +92,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     isam = new gtsam::ISAM2(parameters);
 
     gtsam::Vector6 Sigmas(6);
-    Sigmas << 0.05, 0.05, 1e-3, 1e-2, 1e-2, 0.8; // rad, rad, rad, m, m, m
+    Sigmas << 0.05, 0.05, 1e-3, 0.5, 0.5, 0.8; // rad, rad, rad, m, m, m
     gtsam::Vector6 imuSigmas(6);
     imuSigmas << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
@@ -111,7 +112,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     odometryNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
     constraintNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
     imuPoseNoise = gtsam::noiseModel::Diagonal::Variances(imuSigmas);
-    imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.1); // m/s
+    imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.3); // m/s
     imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
     structureNoise = gtsam::noiseModel::Diagonal::Variances(structureSigmas);
 
@@ -119,7 +120,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
     auto p = imuParams();
 
-    preintegrated = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(p, priorImuBias);
+    preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(p, priorImuBias);
 
 }
 // Destructor method
@@ -232,10 +233,12 @@ void Graph::_performIsam()
         _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(index-1), X(index), lastPoseInWorld.between(currentPoseInWorld), odometryNoise));
         initialEstimate.insert(X(index), currentPoseInWorld);
         if (updateImu){
-            auto preintImuCombined = 
-            dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
-            gtsam::CombinedImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
+            auto preintImu = 
+            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
+            gtsam::ImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), preintImu);
             _graph.add(imuFactor);
+            gtsam::imuBias::ConstantBias zero_bias(gtsam::Vector3(0, 0, 0), gtsam::Vector3(0, 0, 0));
+            _graph.add(gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(index-1), B(index), zero_bias, imuBiasNoise));
             initialEstimate.insert(V(index), predImuState.v());
             initialEstimate.insert(B(index), prevImuBias);
         }
@@ -253,9 +256,13 @@ void Graph::_performIsam()
     isamCurrentEstimate = isam->calculateEstimate();
 
     if (updateImu){
+        auto preintImuCombined = 
+            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
         prevImuState = gtsam::NavState(isamCurrentEstimate.at<gtsam::Pose3>(X(index)), isamCurrentEstimate.at<gtsam::Vector3>(V(index)));
         prevImuBias = isamCurrentEstimate.at<gtsam::imuBias::ConstantBias>(B(index));
+        gtsam::Matrix9 cov = preintImuCombined.preintMeasCov();
         preintegrated->resetIntegrationAndSetBias(prevImuBias);
+        preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(*preintegrated, cov);
         updateImu=false;
     }
 
@@ -756,14 +763,14 @@ void Graph::_cloud2Map(){
             cv::setIdentity(priorMatA);
             cv::Mat priorMatB = matB.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD));
             gtsam::Vector6 prior = - gtsam::Pose3::Logmap(predImuState.pose().inverse() * currentPoseInWorld);
-            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
+            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
             //std::cout << "prior before whitening: " << prior << std::endl;
 
             gtsam::Matrix6 cov = preintImuCombined.preintMeasCov().block<6,6>(0, 0, 6, 6);
             gtsam::Matrix6 whitener = gtsam::inverse_square_root(cov);
             gtsam::Vector6 whitenedPrior = whitener * prior;
 
-            std::cout << cov << std::endl;
+            //std::cout << cov << std::endl;
 
             priorMatB.at<double>(0, 0) = whitenedPrior(0);
             priorMatB.at<double>(1, 0) = whitenedPrior(1);
@@ -935,8 +942,31 @@ void Graph::_publishTransformed()
     }
     if (pubTransformedPose.getNumSubscribers() > 0){
         geometry_msgs::PoseStamped pose;
+        geometry_msgs::PoseWithCovarianceStamped poseWCov;
+        poseWCov.header.frame_id = "map";
+        poseWCov.header.stamp = ros::Time::now();
         pose.header.frame_id = "map";
         pose.header.stamp = ros::Time::now();
+
+        auto estimate = isamCurrentEstimate.at<gtsam::Pose3>(X(cloudKeyPoses->points.size()-1));
+        auto cov = isam->marginalCovariance(X(cloudKeyPoses->points.size()-1));
+
+        poseWCov.pose.pose.position.z   = estimate.z();
+        poseWCov.pose.pose.position.y   = estimate.y();
+        poseWCov.pose.pose.position.x   = estimate.x();
+        poseWCov.pose.pose.orientation.w  = estimate.rotation().toQuaternion().w();
+        poseWCov.pose.pose.orientation.x  = estimate.rotation().toQuaternion().x();
+        poseWCov.pose.pose.orientation.y  = estimate.rotation().toQuaternion().y();
+        poseWCov.pose.pose.orientation.z  = estimate.rotation().toQuaternion().z();
+        std::cout << "From ISAM: " << cov << std::endl;
+        std::cout << "To RVIZ: ";
+        int row = 0;
+        int col = 0;
+        for (int i=0; i<36; i++){
+            row = i / 6;
+            col = i % 6;
+            poseWCov.pose.covariance.at(i)= (double) cov(row, col);
+        }
 
         pose.pose.position.x   = currentPoseInWorld.x();
         pose.pose.position.y   = currentPoseInWorld.y();
@@ -946,7 +976,7 @@ void Graph::_publishTransformed()
         pose.pose.orientation.y  = currentPoseInWorld.rotation().toQuaternion().y();
         pose.pose.orientation.z  = currentPoseInWorld.rotation().toQuaternion().z();
 
-        pubTransformedPose.publish(pose);
+        pubTransformedPose.publish(poseWCov);
 
     }
 }
