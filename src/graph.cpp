@@ -34,10 +34,10 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.0003924;
-  double gyro_noise_sigma = 0.000205689024915;
-  double accel_bias_rw_sigma = 0.004905;
-  double gyro_bias_rw_sigma = 0.000001454441043;
+  double accel_noise_sigma = 0.002;
+  double gyro_noise_sigma = 5e-05;
+  double accel_bias_rw_sigma = 0.004;
+  double gyro_bias_rw_sigma = 1e-4;
   gtsam::Matrix33 measured_acc_cov = gtsam::I_3x3 * pow(accel_noise_sigma, 2);
   gtsam::Matrix33 measured_omega_cov = gtsam::I_3x3 * pow(gyro_noise_sigma, 2);
   gtsam::Matrix33 integration_error_cov =
@@ -47,7 +47,7 @@ boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() 
   gtsam::Matrix66 bias_acc_omega_int =
       gtsam::I_6x6 * 1e-5;  // error in the bias used for preintegration
 
-  auto p = gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedD(0.0);
+  auto p = gtsam::PreintegratedCombinedMeasurements::Params::MakeSharedD();
   // PreintegrationBase params:
   p->accelerometerCovariance =
       measured_acc_cov;  // acc white noise in continuous
@@ -262,11 +262,12 @@ void Graph::_performIsam()
     currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(X(index));
 
     cloudKeyPositions->push_back(pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z()));
-
-    currentPose.x = currentPoseInWorld.translation().x(); currentPose.y = currentPoseInWorld.translation().y(); currentPose.z = currentPoseInWorld.translation().z();
+    
+    _fromPose3ToPointXYZRPY(currentPoseInWorld, currentPose);
+    /*currentPose.x = currentPoseInWorld.translation().x(); currentPose.y = currentPoseInWorld.translation().y(); currentPose.z = currentPoseInWorld.translation().z();
     currentPose.roll = currentPoseInWorld.rotation().roll();
     currentPose.pitch = currentPoseInWorld.rotation().pitch();
-    currentPose.yaw = currentPoseInWorld.rotation().yaw();
+    currentPose.yaw = currentPoseInWorld.rotation().yaw();*/
 
     cloudKeyPoses->push_back(currentPose);
 
@@ -587,7 +588,7 @@ void Graph::groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointClou
 void Graph::imuHandler(const sensor_msgs::ImuConstPtr &imuMsg){
     double time = imuMsg->header.stamp.toSec();
     gtsam::Vector6 measurement;
-    measurement << imuMsg->linear_acceleration.x, -imuMsg->linear_acceleration.y, -imuMsg->linear_acceleration.z + 9.81, imuMsg->angular_velocity.x, -imuMsg->angular_velocity.y, -imuMsg->angular_velocity.z; //IMU measurement in Lidar frame
+    measurement << imuMsg->linear_acceleration.x, -imuMsg->linear_acceleration.y, -imuMsg->linear_acceleration.z, imuMsg->angular_velocity.x, -imuMsg->angular_velocity.y, -imuMsg->angular_velocity.z; //IMU measurement in Lidar frame
     mtx.lock();
     imuMeasurements.push_back(std::pair<double, gtsam::Vector6>(time, measurement));
     newImu = true;
@@ -626,8 +627,8 @@ void Graph::_cloud2Map(){
     std::cout << "Correspondences: " << partialOverlapCorrespondences->size() << std::endl;
 
     int nPoints = partialOverlapCorrespondences->size();
-    int pointD = 3; int poseD = 6; int priorD = 6;
-    int ARows = nPoints*pointD;// + priorD;
+    int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
+    int ARows = nPoints*pointD + priorD;
     int BRows = ARows;
     int ACols = poseD;// + pointD*nPoints;
     int XCols = ACols;
@@ -668,27 +669,27 @@ void Graph::_cloud2Map(){
 
             // Calculate Jacobians
             auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
-            J_hij_TwLi.at<double>(0, 0) = R_wLi.matrix()(0, 0);
-            J_hij_TwLi.at<double>(0, 1) = R_wLi.matrix()(0, 1);
-            J_hij_TwLi.at<double>(0, 2) = R_wLi.matrix()(0, 2);
-            J_hij_TwLi.at<double>(1, 0) = R_wLi.matrix()(1, 0);
-            J_hij_TwLi.at<double>(1, 1) = R_wLi.matrix()(1, 1);
-            J_hij_TwLi.at<double>(1, 2) = R_wLi.matrix()(1, 2);
-            J_hij_TwLi.at<double>(2, 0) = R_wLi.matrix()(2, 0);
-            J_hij_TwLi.at<double>(2, 1) = R_wLi.matrix()(2, 1);
-            J_hij_TwLi.at<double>(2, 2) = R_wLi.matrix()(2, 2);
+            J_hij_TwLi.at<double>(0, 3) = R_wLi.matrix()(0, 0);
+            J_hij_TwLi.at<double>(0, 4) = R_wLi.matrix()(0, 1);
+            J_hij_TwLi.at<double>(0, 5) = R_wLi.matrix()(0, 2);
+            J_hij_TwLi.at<double>(1, 3) = R_wLi.matrix()(1, 0);
+            J_hij_TwLi.at<double>(1, 4) = R_wLi.matrix()(1, 1);
+            J_hij_TwLi.at<double>(1, 5) = R_wLi.matrix()(1, 2);
+            J_hij_TwLi.at<double>(2, 3) = R_wLi.matrix()(2, 0);
+            J_hij_TwLi.at<double>(2, 4) = R_wLi.matrix()(2, 1);
+            J_hij_TwLi.at<double>(2, 5) = R_wLi.matrix()(2, 2);
             /*J_hij_TwLi.at<double>(0, 0) = 1;
             J_hij_TwLi.at<double>(1, 1) = 1;
             J_hij_TwLi.at<double>(2, 2) = 1;*/
-            J_hij_TwLi.at<double>(0, 3) = tmp(0, 0);
-            J_hij_TwLi.at<double>(0, 4) = tmp(0, 1);
-            J_hij_TwLi.at<double>(0, 5) = tmp(0, 2);
-            J_hij_TwLi.at<double>(1, 3) = tmp(1, 0);
-            J_hij_TwLi.at<double>(1, 4) = tmp(1, 1);
-            J_hij_TwLi.at<double>(1, 5) = tmp(1, 2);
-            J_hij_TwLi.at<double>(2, 3) = tmp(2, 0);
-            J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
-            J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
+            J_hij_TwLi.at<double>(0, 0) = tmp(0, 0);
+            J_hij_TwLi.at<double>(0, 1) = tmp(0, 1);
+            J_hij_TwLi.at<double>(0, 2) = tmp(0, 2);
+            J_hij_TwLi.at<double>(1, 0) = tmp(1, 0);
+            J_hij_TwLi.at<double>(1, 1) = tmp(1, 1);
+            J_hij_TwLi.at<double>(1, 2) = tmp(1, 2);
+            J_hij_TwLi.at<double>(2, 0) = tmp(2, 0);
+            J_hij_TwLi.at<double>(2, 1) = tmp(2, 1);
+            J_hij_TwLi.at<double>(2, 2) = tmp(2, 2);
 
             /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_64F, cv::Scalar::all(0));
             J_hij_xwj.at<double>(0, 0) = R_wLi.matrix()(0, 0);
@@ -722,6 +723,7 @@ void Graph::_cloud2Map(){
 
             // Propagate uncertainty
             cv::Mat sigmasPose(6, 6, CV_64F, cv::Scalar::all(0));
+            
             cv::eigen2cv(odometryNoise->covariance(), sigmasPose);
             cv::Mat sigmasPoseFloat;
             sigmasPose.convertTo(sigmasPoseFloat, CV_64F);
@@ -748,18 +750,28 @@ void Graph::_cloud2Map(){
             //cv::Mat Si = whitenerSqrtInv * J_hij_xwj;
             //Si.copyTo(SsubMatA);
         }
-        // Add prior
-        /*cv::Mat priorMatA = matA.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD)).colRange(cv::Range(0, poseD));
-        cv::setIdentity(priorMatA);
-        cv::Mat priorMatB = matB.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD));
-        gtsam::Vector6 prior = - gtsam::Pose3::Logmap(predImuState.pose().inverse() * currentPoseInWorld);
+        // Add prior if imu data is available
+        if (updateImu){
+            cv::Mat priorMatA = matA.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD)).colRange(cv::Range(0, poseD));
+            cv::setIdentity(priorMatA);
+            cv::Mat priorMatB = matB.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD));
+            gtsam::Vector6 prior = - gtsam::Pose3::Logmap(predImuState.pose().inverse() * currentPoseInWorld);
+            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
+            //std::cout << "prior before whitening: " << prior << std::endl;
 
-        priorMatB.at<double>(0, 0) = prior(0);
-        priorMatB.at<double>(1, 0) = prior(1);
-        priorMatB.at<double>(2, 0) = prior(2);
-        priorMatB.at<double>(3, 0) = prior(3);
-        priorMatB.at<double>(4, 0) = prior(4);
-        priorMatB.at<double>(5, 0) = prior(5);*/
+            gtsam::Matrix6 cov = preintImuCombined.preintMeasCov().block<6,6>(0, 0, 6, 6);
+            gtsam::Matrix6 whitener = gtsam::inverse_square_root(cov);
+            gtsam::Vector6 whitenedPrior = whitener * prior;
+
+            std::cout << cov << std::endl;
+
+            priorMatB.at<double>(0, 0) = whitenedPrior(0);
+            priorMatB.at<double>(1, 0) = whitenedPrior(1);
+            priorMatB.at<double>(2, 0) = whitenedPrior(2);
+            priorMatB.at<double>(3, 0) = whitenedPrior(3);
+            priorMatB.at<double>(4, 0) = whitenedPrior(4);
+            priorMatB.at<double>(5, 0) = whitenedPrior(5);
+        }
 
         cv::transpose(matA, matAt);
         matAtA = matAt * matA;
@@ -774,7 +786,7 @@ void Graph::_cloud2Map(){
         gtsam::Pose3 keyPoseBefore = currentPoseInWorld;
 
         gtsam::Vector6 xi;
-        xi << matX.at<double>(3, 0), matX.at<double>(4, 0), matX.at<double>(5, 0), matX.at<double>(0, 0), matX.at<double>(1, 0), matX.at<double>(2, 0);
+        xi << matX.at<double>(0, 0), matX.at<double>(1, 0), matX.at<double>(2, 0), matX.at<double>(3, 0), matX.at<double>(4, 0), matX.at<double>(5, 0);
         std::cout << cv::norm(matX) << std::endl;
 
         gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
