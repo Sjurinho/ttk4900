@@ -12,9 +12,9 @@ int main(int argc, char** argv)
     ros::NodeHandle pnh("~"); 
     
     Graph node(nh,pnh); // Creating the object
+    std::thread smoothThread(&Graph::runSmoothing, &node);
 
     ros::Rate rate(10); // Defing the looping rate
-    //std::thread smoothThread(&Graph::runSmoothing, &node);
 
     /* Looking for any interupt else it will continue looping */
     while (ros::ok())
@@ -24,6 +24,7 @@ int main(int argc, char** argv)
         node.runOnce();
         rate.sleep();
     }
-    //smoothThread.join();
+    smoothThread.join();
     return 0;
+
 }

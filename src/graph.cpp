@@ -5,6 +5,7 @@
 #include <pcl/octree/octree_pointcloud_changedetector.h>
 #include <pcl/registration/correspondence_estimation.h>
 #include <pcl/registration/correspondence_rejection_trimmed.h>
+#include <pcl/registration/correspondence_rejection_sample_consensus.h>
 
 
 #include <geometry_msgs/Quaternion.h>
@@ -16,10 +17,21 @@
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/expressions.h>
+#include <gtsam/nonlinear/ExpressionFactorGraph.h>
+#include <gtsam/geometry/BearingRange.h>
+
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/eigen.hpp>
+
+using gtsam::symbol_shorthand::B;  // Bias  (ax,ay,az,gx,gy,gz)
+using gtsam::symbol_shorthand::V;  // Vel   (xdot,ydot,zdot)
+using gtsam::symbol_shorthand::X;  // Pose3 (x,y,z,r,p,y)
+using gtsam::symbol_shorthand::L;  // Point3 (x,y,z)
+
+typedef gtsam::BearingRange<gtsam::Pose3, gtsam::Point3> BearingRange3D;
 
 void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
     cv::Mat U, V, Vi, E;
@@ -35,10 +47,10 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.06;
-  double gyro_noise_sigma = 5e-03;
-  double accel_bias_rw_sigma = 0.04;
-  double gyro_bias_rw_sigma = 1e-3;
+  double accel_noise_sigma = 0.0003924;
+  double gyro_noise_sigma = 8e-05;
+  double accel_bias_rw_sigma = 0.02;
+  double gyro_bias_rw_sigma = 0.0001454441043;
   gtsam::Matrix33 measured_acc_cov = gtsam::I_3x3 * pow(accel_noise_sigma, 2);
   gtsam::Matrix33 measured_omega_cov = gtsam::I_3x3 * pow(gyro_noise_sigma, 2);
   gtsam::Matrix33 integration_error_cov =
@@ -66,9 +78,6 @@ boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() 
   return p;
 }
 
-using gtsam::symbol_shorthand::B;  // Bias  (ax,ay,az,gx,gy,gz)
-using gtsam::symbol_shorthand::V;  // Vel   (xdot,ydot,zdot)
-using gtsam::symbol_shorthand::X;  // Pose3 (x,y,z,r,p,y)
 
 //constructor method
 Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
@@ -92,9 +101,9 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     isam = new gtsam::ISAM2(parameters);
 
     gtsam::Vector6 Sigmas(6);
-    Sigmas << 0.05, 0.05, 1e-3, 0.5, 0.5, 0.8; // rad, rad, rad, m, m, m
+    Sigmas << 0.05, 0.05, 1e-3, 0.08, 0.08, 0.3; // rad, rad, rad, m, m, m
     gtsam::Vector6 imuSigmas(6);
-    imuSigmas << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5; // rad, rad, rad, m, m, m
+    imuSigmas << 0.01, 0.01, 0.01, 0.1, 0.1, 0.3; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
     structureSigmas << 0.2, 0.2 ,0.2; //m, m, m
 
@@ -112,7 +121,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     odometryNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
     constraintNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
     imuPoseNoise = gtsam::noiseModel::Diagonal::Variances(imuSigmas);
-    imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.3); // m/s
+    imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.1); // m/s
     imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
     structureNoise = gtsam::noiseModel::Diagonal::Variances(structureSigmas);
 
@@ -120,7 +129,8 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
     auto p = imuParams();
 
-    preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(p, priorImuBias);
+    //preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(p, priorImuBias);
+    preintegrated = std::make_shared<gtsam::PreintegratedCombinedMeasurements>(p, priorImuBias);
 
 }
 // Destructor method
@@ -219,7 +229,7 @@ void Graph::_performIsam()
     //ROS_INFO("SAVING NEW KEY FRAME");
     previousPosPoint = currentPosPoint;
     uint64_t index = cloudKeyPositions->points.size();
-    std::cout << "INDEX: " << index << std::endl;
+    //std::cout << "INDEX: " << index << std::endl;
     if (cloudKeyPositions->points.empty()){
         _graph.add(gtsam::PriorFactor<gtsam::Pose3>(X(index), currentPoseInWorld, priorNoise));
         
@@ -233,12 +243,15 @@ void Graph::_performIsam()
         _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(index-1), X(index), lastPoseInWorld.between(currentPoseInWorld), odometryNoise));
         initialEstimate.insert(X(index), currentPoseInWorld);
         if (updateImu){
-            auto preintImu = 
-            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
-            gtsam::ImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), preintImu);
-            _graph.add(imuFactor);
-            gtsam::imuBias::ConstantBias zero_bias(gtsam::Vector3(0, 0, 0), gtsam::Vector3(0, 0, 0));
-            _graph.add(gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(index-1), B(index), zero_bias, imuBiasNoise));
+            /*auto preintImu = 
+            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);*/
+            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
+            //gtsam::ImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), preintImu);
+            gtsam::CombinedImuFactor combinedImuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
+            //_graph.add(imuFactor);
+            //gtsam::imuBias::ConstantBias zero_bias(gtsam::Vector3(0, 0, 0), gtsam::Vector3(0, 0, 0));
+            //_graph.add(gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(index-1), B(index), zero_bias, imuBiasNoise));
+            _graph.add(combinedImuFactor);
             initialEstimate.insert(V(index), predImuState.v());
             initialEstimate.insert(B(index), prevImuBias);
         }
@@ -256,13 +269,12 @@ void Graph::_performIsam()
     isamCurrentEstimate = isam->calculateEstimate();
 
     if (updateImu){
-        auto preintImuCombined = 
-            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
+        //auto preintImu = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
         prevImuState = gtsam::NavState(isamCurrentEstimate.at<gtsam::Pose3>(X(index)), isamCurrentEstimate.at<gtsam::Vector3>(V(index)));
         prevImuBias = isamCurrentEstimate.at<gtsam::imuBias::ConstantBias>(B(index));
-        gtsam::Matrix9 cov = preintImuCombined.preintMeasCov();
+        //gtsam::Matrix9 cov = preintImu.preintMeasCov();
         preintegrated->resetIntegrationAndSetBias(prevImuBias);
-        preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(*preintegrated, cov);
+        //preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(*preintegrated, cov);
         updateImu=false;
     }
 
@@ -283,6 +295,7 @@ void Graph::_performIsam()
     pcl::PointCloud<pcl::PointNormal>::Ptr thisKeyFrame(new pcl::PointCloud<pcl::PointNormal>());
     pcl::copyPointCloud(*currentFeatureCloud, *thisKeyFrame);
     cloudKeyFrames.push_back(thisKeyFrame);
+    newCloudsQueue.push_back(thisKeyFrame);
 }
 
 void Graph::_createKeyFramesMap(){
@@ -329,225 +342,74 @@ void Graph::_lateralEstimation()
 void Graph::_smoothPoses(){
     auto skewSymmetric = [](double a, double b, double c){return gtsam::skewSymmetric(a, b, c);};
 
-    if (cloudKeyFrames.size() < smoothingFrames) return;
-
-    int latestFrame = cloudKeyFrames.size();
-    int minNrOfPoints = std::numeric_limits<int>::max();
-    for (int i = 0; i < smoothingFrames; ++i){
-        int frameID = latestFrame - smoothingFrames + i;
-        int size = cloudKeyFrames[frameID]->points.size();
-        if (size < minNrOfPoints){
-            minNrOfPoints = size; //> 1000 ? 1000 : size;
-        }
+    mtx.lock();
+    if (newCloudsQueue.empty()){
+        mtx.unlock();
+        return;
     }
-    int pointD = 3; int poseD = 6;
-    int ARows = minNrOfPoints*smoothingFrames*pointD;
-    //int ARows = minNrOfPoints*smoothingFrames*poseD;
-    int BRows = ARows;
-    int ACols = poseD*smoothingFrames; //+ pointD*minNrOfPoints;
-    int XCols = ACols;
-    //int iter = 0;
-    bool updated = false;
-    double lambda = 1e-4;
-    std::vector<gtsam::Point3> worldPoints; 
-    worldPoints.reserve(minNrOfPoints*smoothingFrames);
-    std::vector<gtsam::Point3> localPoints; 
-    localPoints.reserve(minNrOfPoints*smoothingFrames); //reserve space
-    for (int iter = 0; iter<maxIterSmoothing; iter++){
-        worldPoints.clear(); localPoints.clear();
-        cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_64FC1);
-        cv::Mat matAt(ACols, ARows, CV_64FC1, cv::Scalar::all(0.0));
-        cv::Mat matAtA(ACols, ACols, CV_64FC1, cv::Scalar::all(0));
-        cv::Mat matB(BRows, 1, CV_64FC1, cv::Scalar::all(0));
-        cv::Mat matAtB(ACols, 1, CV_64FC1, cv::Scalar::all(0));
-        cv::Mat matX(XCols, 1, CV_64FC1, cv::Scalar::all(0));
-        for (int k = 0; k < smoothingFrames; ++k){
-            //#TODO: CALCULATE CORRESPONDENCES DIFFERENTLY
-            // Extract frame
-            int frameID = latestFrame - smoothingFrames + k;
-            pcl::PointCloud<pcl::PointNormal> framePoints = *cloudKeyFrames[frameID];
-            pcl::PointCloud<pcl::PointNormal> frameInWorld;
-            PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
-            
-            gtsam::Pose3 poseInWorld;
-            _fromPointXYZRPYToPose3(keyPose, poseInWorld);
+    int poseN = cloudKeyFrames.size() - newCloudsQueue.size();
 
-            pcl::transformPointCloud(framePoints, frameInWorld, poseInWorld.matrix());
-            auto R_wLi = poseInWorld.rotation();
-            auto t_wi  = poseInWorld.translation();
+    std::vector<gtsam::Pose3> framePoses;
+    for (int i = 0; i<newCloudsQueue.size(); i++)
+    {
+        framePoses.push_back(isamCurrentEstimate.at<gtsam::Pose3>(X(poseN + i)));
+    }
+    mtx.unlock();
 
-            std::vector<int> indices;
-            std::vector<float> distances;
-            for (int j = 0; j < minNrOfPoints; j++){
-                auto pointInWorld = frameInWorld.at(j);
-                auto pointInLocalFrame = framePoints.at(j);
-                if (octreeMap->nearestKSearch(pointInWorld, 1, indices, distances) > 0) {
-                    // Extract points
-                    auto q_wjPCL = cloudMapFull->at(indices[0]);
-                    auto q_wj = gtsam::Point3(q_wjPCL.x, q_wjPCL.y, q_wjPCL.z);
-                    auto p_wj = gtsam::Point3(pointInWorld.x, pointInWorld.y, pointInWorld.z);
-                    auto p_Lij = gtsam::Point3(pointInLocalFrame.x, pointInLocalFrame.y, pointInLocalFrame.z);
-                    worldPoints[k*minNrOfPoints + j] = q_wj;
-                    localPoints[k*minNrOfPoints + j] = p_Lij;
+    gtsam::ExpressionFactorGraph graph;
+    gtsam::Values initial;
+    int cloudnr = 0;
+    for (const auto &cloud : newCloudsQueue){
+        pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
+        pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal> matcher;
+        matcher.setInputSource(cloud);
+        matcher.setInputTarget(cloudMapFull);
+        matcher.determineReciprocalCorrespondences(*allCorrespondences); 
 
-                    gtsam::Matrix3 tmp = - (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
+        pcl::CorrespondencesPtr ransacCorrespondences(new pcl::Correspondences);
+        pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointNormal> trimmer;
+        trimmer.setInputSource(cloud);
+        trimmer.setInputTarget(cloudMapFull);
+        trimmer.setInputCorrespondences(allCorrespondences);
+        trimmer.setInlierThreshold(0.2);
+        trimmer.setMaximumIterations(100);
+        trimmer.setRefineModel(true);
+        
+        trimmer.getCorrespondences(*ransacCorrespondences);
+        if (ransacCorrespondences->empty()) continue;
+        gtsam::Pose3 pose = framePoses[cloudnr];
+        for (int j = 0; j<ransacCorrespondences->size(); j++){
 
-                    // Calculate Jacobians
-                    auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
-                    /*J_hij_TwLi.at<double>(0, 0) = R_wLi.matrix()(0, 0);
-                    J_hij_TwLi.at<double>(0, 1) = R_wLi.matrix()(0, 1);
-                    J_hij_TwLi.at<double>(0, 2) = R_wLi.matrix()(0, 2);
-                    J_hij_TwLi.at<double>(1, 0) = R_wLi.matrix()(1, 0);
-                    J_hij_TwLi.at<double>(1, 1) = R_wLi.matrix()(1, 1);
-                    J_hij_TwLi.at<double>(1, 2) = R_wLi.matrix()(1, 2);
-                    J_hij_TwLi.at<double>(2, 0) = R_wLi.matrix()(2, 0);
-                    J_hij_TwLi.at<double>(2, 1) = R_wLi.matrix()(2, 1);
-                    J_hij_TwLi.at<double>(2, 2) = R_wLi.matrix()(2, 2);*/
-                    J_hij_TwLi.at<double>(0, 0) = 1;
-                    J_hij_TwLi.at<double>(1, 1) = 1;
-                    J_hij_TwLi.at<double>(2, 2) = 1;
-                    J_hij_TwLi.at<double>(0, 3) = tmp(0, 0);
-                    J_hij_TwLi.at<double>(0, 4) = tmp(0, 1);
-                    J_hij_TwLi.at<double>(0, 5) = tmp(0, 2);
-                    J_hij_TwLi.at<double>(1, 3) = tmp(1, 0);
-                    J_hij_TwLi.at<double>(1, 4) = tmp(1, 1);
-                    J_hij_TwLi.at<double>(1, 5) = tmp(1, 2);
-                    J_hij_TwLi.at<double>(2, 3) = tmp(2, 0);
-                    J_hij_TwLi.at<double>(2, 4) = tmp(2, 1);
-                    J_hij_TwLi.at<double>(2, 5) = tmp(2, 2);
+            int pointIdx = ransacCorrespondences->at(j).index_match;
+            pcl::PointNormal pclPoint = cloudMapFull->at(pointIdx);
+            gtsam::Point3 pointWorld = gtsam::Point3(pclPoint.x, pclPoint.y, pclPoint.y);
+            pcl::PointNormal pclPointFrame = cloud->at(ransacCorrespondences->at(j).index_query);
+            gtsam::Point3 pointMeasured = pose*gtsam::Point3(pclPointFrame.x, pclPointFrame.y, pclPointFrame.z);
 
-                    auto e = p_wj - q_wj;
-                    auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
-                    b_ij.at<double>(0,0) = -e.x();
-                    b_ij.at<double>(1,0) = -e.y();
-                    b_ij.at<double>(2,0) = -e.z();
-
-                    // Extract submatrice to insert into
-                    auto ProwRange = cv::Range(k*minNrOfPoints*pointD + pointD*j, k*minNrOfPoints*pointD + pointD*j + pointD);
-                    auto PcolRange = cv::Range(k*poseD, k*poseD + poseD);
-                    //auto SrowRange = ProwRange;
-                    //auto ScolRange = cv::Range(smoothingFrames*poseD + pointD*j, smoothingFrames*poseD + pointD*j + pointD);
-                    auto bColRange = cv::Range::all();
-                    auto bRowRange = cv::Range(k*minNrOfPoints*pointD + j*pointD, k*minNrOfPoints*pointD + j*pointD + pointD);
-                    //auto bRowRange = cv::Range(k*minNrOfPoints*poseD + j*poseD, k*minNrOfPoints*poseD + j*poseD + poseD);
-
-                    cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
-                    //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
-                    cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
-
-                    // Propagate uncertainty
-                    cv::Mat sigmas(6, 6, CV_64F, cv::Scalar::all(0));
-                    cv::eigen2cv(odometryNoise->covariance(), sigmas);
-                    cv::Mat sigmasFloat;
-                    sigmas.convertTo(sigmasFloat, CV_64F);
-
-                    cv::Mat whitener = J_hij_TwLi * sigmasFloat * J_hij_TwLi.t();
-                    cv::Mat whitenerInv;
-                    cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
-                    cv::Mat whitenerSqrtInv;
-                    matrix_square_root(whitenerInv, whitenerSqrtInv);
-
-                    // Copy into submatrices
-                    cv::Mat Ai = whitenerSqrtInv * J_hij_TwLi;
-                    Ai.copyTo(PsubMatA);
-                    cv::Mat bi = whitenerSqrtInv * b_ij;
-                    //J_hij_xwj.copyTo(SsubMatA);
-                    bi.copyTo(bsubMatB);
-                }
+            auto prediction = gtsam::Expression<BearingRange3D>
+            (BearingRange3D::Measure, gtsam::Pose3_(X(cloudnr)), gtsam::Point3_(L(pointIdx)));
+            auto measurement = BearingRange3D(pose.bearing(pointMeasured), pose.range(pointMeasured));
+            graph.addExpressionFactor(prediction, measurement, structureNoise);
+            try{
+                initial.insert(L(pointIdx), pointMeasured);
+            }
+            catch (...) {
+                continue;
             }
         }
-        cv::transpose(matA, matAt);
-        matAtA = matAt * matA;
-        auto matAtAdiag = cv::Mat::diag(matAtA.diag());
-        matAtB = matAt * matB;
-        cv::solve(matAtA + (lambda * matAtAdiag), matAtB, matX, cv::DECOMP_QR);
-        std::vector<PointXYZRPY> keyPosesBefore;
-        std::vector<PointXYZRPY> keyPosesAfter;
-        std::vector<PointXYZRPY> keyPosesResult;
-        std::cout << cv::norm(matX, 2) << std::endl;
-        // Check Update
-        for (int k = 0; k < smoothingFrames; k++){
-            int frameID = latestFrame - smoothingFrames + k;
-            pcl::PointXYZ keyPos = cloudKeyPositions->at(frameID);
-            PointXYZRPY keyPose = cloudKeyPoses->at(frameID);
-            keyPosesBefore.push_back(keyPose);
-
-            gtsam::Pose3 gtsamKeyPose;
-            _fromPointXYZRPYToPose3(keyPose, gtsamKeyPose);
-
-            gtsam::Vector6 xi;
-            xi << matX.at<double>(k*poseD + 3, 0), matX.at<double>(k*poseD + 4, 0), matX.at<double>(k*poseD + 5, 0), matX.at<double>(k*poseD + 0, 0), matX.at<double>(k*poseD + 1, 0), matX.at<double>(k*poseD + 2, 0);
-
-            gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
-
-            _fromPose3ToPointXYZRPY(gtsamKeyPose * tau, keyPose);
-            keyPosesAfter.push_back(keyPose);
+        if (cloudnr > 0){
+            graph.addExpressionFactor(gtsam::between(gtsam::Pose3_(X(cloudnr-1)), gtsam::Pose3_(X(cloudnr))), framePoses[cloudnr-1].between(framePoses[cloudnr]), imuPoseNoise);
         }
-        //_applyUpdate(keyPosesAfter, latestFrame);
-        double fxBefore = 0;
-        double fxAfter = 0;
-        double fxResult = 0;
-        _evaluate_transformation(minNrOfPoints, latestFrame, keyPosesBefore, keyPosesAfter, worldPoints, localPoints, fxBefore, fxAfter);
-        auto streng = "BEFORE: " + std::to_string(fxBefore) + ", AFTER: " + std::to_string(fxAfter);
-        //std::cout << streng << std::endl;
-        if (fxAfter < fxBefore){
-            //ROS_INFO("GOOD STEP");
-            //std::lock_guard<std::mutex> lock(mtx);
-            updated = true;
-            _applyUpdate(keyPosesAfter, latestFrame);
-            lambda /= 10;
-            fxResult = fxAfter;
-        }
-        else{
-            //ROS_INFO("BAD STEP");
-            lambda *= 10;
-            fxResult = fxBefore;
-        }
-
-        if (fxResult < fxTol || cv::norm(matX, 2) < stepTol) {
-            break;
-        }
+        initial.insert(X(cloudnr), framePoses[cloudnr]);
+        cloudnr++;
     }
-    PointXYZRPY lastKeyPose = cloudKeyPoses->back();
-    gtsam::Vector3 rotVec(lastKeyPose.roll, lastKeyPose.pitch, lastKeyPose.yaw);
-    gtsam::Point3 trans(lastKeyPose.x, lastKeyPose.y, lastKeyPose.z);
-    gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
-    currentPoseInWorld = gtsam::Pose3(orientation, trans) * displacement;
-    /*for (int i = 0; i < minNrOfPoints; i++){ #TODO: decide whether or not to optimize points also
+    newCloudsQueue.clear();
+    std::cout << "initial error: " << graph.error(initial) << std::endl;
+    gtsam::Values result = gtsam::LevenbergMarquardtOptimizer(graph, initial).optimize();
+    std::cout << "final error: " << graph.error(result) << std::endl;
 
-    }*/
-    //std::cout << "norm: " << cv::norm(matX, cv::NORM_L2) << std::endl;
-}
-
-void Graph::_applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame)
-{   
-    std::lock_guard<std::mutex> lock(mtx);
-    for (int k = 0; k < smoothingFrames; k++){
-        int frameID = latestFrame - smoothingFrames + k;
-        cloudKeyPoses->at(frameID) = keyPoses.at(k);
-    }
-}
-
-void Graph::_evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter)
-{   
-    resultBefore = 0; resultAfter = 0;
-    for (int k = 0; k < smoothingFrames; ++k){
-        PointXYZRPY keyPoseBefore = posesBefore.at(k);
-        PointXYZRPY keyPoseAfter  = posesAfter.at(k);
-
-        gtsam::Pose3 poseInWorldBefore;
-        gtsam::Pose3 poseInWorldAfter;
-        _fromPointXYZRPYToPose3(keyPoseBefore, poseInWorldBefore);
-        _fromPointXYZRPYToPose3(keyPoseAfter, poseInWorldAfter);
-        for (int j = 0; j < minNrOfPoints; j++){
-
-            auto q_wj = pointsWorld[k*minNrOfPoints + j];
-            auto p_Lij = pointsLocal[k*minNrOfPoints + j];
-
-            resultBefore += pow(gtsam::norm3(poseInWorldBefore * p_Lij - q_wj), 2);
-            resultAfter += pow(gtsam::norm3(poseInWorldAfter * p_Lij - q_wj), 2);
-        }
-    }
+    graph.keys().print();
+    gtsam::K
 }
 
 void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
@@ -596,6 +458,7 @@ void Graph::imuHandler(const sensor_msgs::ImuConstPtr &imuMsg){
     double time = imuMsg->header.stamp.toSec();
     gtsam::Vector6 measurement;
     measurement << imuMsg->linear_acceleration.x, -imuMsg->linear_acceleration.y, -imuMsg->linear_acceleration.z, imuMsg->angular_velocity.x, -imuMsg->angular_velocity.y, -imuMsg->angular_velocity.z; //IMU measurement in Lidar frame
+    //measurement << imuMsg->linear_acceleration.x, imuMsg->linear_acceleration.y, imuMsg->linear_acceleration.z, imuMsg->angular_velocity.x, imuMsg->angular_velocity.y, imuMsg->angular_velocity.z;
     mtx.lock();
     imuMeasurements.push_back(std::pair<double, gtsam::Vector6>(time, measurement));
     newImu = true;
@@ -613,7 +476,7 @@ void Graph::_cloud2Map(){
     pcl::CorrespondencesPtr partialOverlapCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     trimmer.setInputCorrespondences(allCorrespondences);
-    trimmer.setOverlapRatio(0.4);
+    trimmer.setOverlapRatio(0.8);
 
 
     pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
@@ -631,7 +494,7 @@ void Graph::_cloud2Map(){
     matcher.determineReciprocalCorrespondences(*allCorrespondences); 
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
-    std::cout << "Correspondences: " << partialOverlapCorrespondences->size() << std::endl;
+    //std::cout << "Correspondences: " << partialOverlapCorrespondences->size() << std::endl;
 
     int nPoints = partialOverlapCorrespondences->size();
     int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
@@ -763,9 +626,9 @@ void Graph::_cloud2Map(){
             cv::setIdentity(priorMatA);
             cv::Mat priorMatB = matB.rowRange(cv::Range(nPoints*pointD, nPoints*pointD + poseD));
             gtsam::Vector6 prior = - gtsam::Pose3::Logmap(predImuState.pose().inverse() * currentPoseInWorld);
-            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
+            //auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
+            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
             //std::cout << "prior before whitening: " << prior << std::endl;
-
             gtsam::Matrix6 cov = preintImuCombined.preintMeasCov().block<6,6>(0, 0, 6, 6);
             gtsam::Matrix6 whitener = gtsam::inverse_square_root(cov);
             gtsam::Vector6 whitenedPrior = whitener * prior;
@@ -794,7 +657,7 @@ void Graph::_cloud2Map(){
 
         gtsam::Vector6 xi;
         xi << matX.at<double>(0, 0), matX.at<double>(1, 0), matX.at<double>(2, 0), matX.at<double>(3, 0), matX.at<double>(4, 0), matX.at<double>(5, 0);
-        std::cout << cv::norm(matX) << std::endl;
+        //std::cout << cv::norm(matX) << std::endl;
 
         gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
 
@@ -814,9 +677,9 @@ void Graph::_cloud2Map(){
             fxAfter += pow(gtsam::norm3(keyPoseAfter * p_Lij - q_wj), 2);
         }
         auto streng = "BEFORE: " + std::to_string(fxBefore) + ", AFTER: " + std::to_string(fxAfter);
-        std::cout << streng << std::endl;
+        //std::cout << streng << std::endl;
         if (fxAfter < fxBefore){
-            ROS_INFO("GOOD STEP");
+            //ROS_INFO("GOOD STEP");
             //std::lock_guard<std::mutex> lock(mtx);
             /*for (int i = 0; i < nPoints; i++){ 
                 int sourceIndex = allCorrespondences->at(i).index_query;
@@ -869,11 +732,12 @@ void Graph::runOnce()
         _transformToGlobalMap();
 
         _performIsam();
+
+        _publishTransformed();
         mtx.unlock();
         
         _publishTrajectory();
         
-        _publishTransformed();
     }
 }
 
@@ -941,12 +805,10 @@ void Graph::_publishTransformed()
         pubTransformedMap.publish(msg);
     }
     if (pubTransformedPose.getNumSubscribers() > 0){
-        geometry_msgs::PoseStamped pose;
         geometry_msgs::PoseWithCovarianceStamped poseWCov;
         poseWCov.header.frame_id = "map";
-        poseWCov.header.stamp = ros::Time::now();
-        pose.header.frame_id = "map";
-        pose.header.stamp = ros::Time::now();
+        //double t = timeOdometry;
+        poseWCov.header.stamp = timer.fromSec(timeOdometry);
 
         auto estimate = isamCurrentEstimate.at<gtsam::Pose3>(X(cloudKeyPoses->points.size()-1));
         auto cov = isam->marginalCovariance(X(cloudKeyPoses->points.size()-1));
@@ -958,26 +820,16 @@ void Graph::_publishTransformed()
         poseWCov.pose.pose.orientation.x  = estimate.rotation().toQuaternion().x();
         poseWCov.pose.pose.orientation.y  = estimate.rotation().toQuaternion().y();
         poseWCov.pose.pose.orientation.z  = estimate.rotation().toQuaternion().z();
-        std::cout << "From ISAM: " << cov << std::endl;
-        std::cout << "To RVIZ: ";
         int row = 0;
         int col = 0;
+        std::map<int, int> map = {{0, 3}, {1,4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}};
         for (int i=0; i<36; i++){
             row = i / 6;
             col = i % 6;
-            poseWCov.pose.covariance.at(i)= (double) cov(row, col);
+            //std::cout << "map[row]: " << map[row] << " map[col]: " << map[col] << std::endl;
+            poseWCov.pose.covariance.at(i)= (double) cov(map[row], map[col]);
         }
-
-        pose.pose.position.x   = currentPoseInWorld.x();
-        pose.pose.position.y   = currentPoseInWorld.y();
-        pose.pose.position.z   = currentPoseInWorld.z();
-        pose.pose.orientation.w  = currentPoseInWorld.rotation().toQuaternion().w();
-        pose.pose.orientation.x  = currentPoseInWorld.rotation().toQuaternion().x();
-        pose.pose.orientation.y  = currentPoseInWorld.rotation().toQuaternion().y();
-        pose.pose.orientation.z  = currentPoseInWorld.rotation().toQuaternion().z();
-
         pubTransformedPose.publish(poseWCov);
-
     }
 }
 
@@ -985,7 +837,7 @@ void Graph::_publishTrajectory()
 {
     if (!(pubPoseArray.getNumSubscribers() > 0)) return;
     geometry_msgs::PoseArray poseArray;
-    poseArray.header.stamp = ros::Time::now();
+    poseArray.header.stamp = timer.now();
     poseArray.header.frame_id = "map";
     int poses = cloudKeyPoses->points.size();
     for (int i = 0; i<poses; i++){

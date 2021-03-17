@@ -307,3 +307,6 @@ simulator_matlab/*.mat
 simulator_matlab/slprj/
 simulator_matlab/deprecated/
 simulator_matlab/*.slxc
+
+# Python
+venv/

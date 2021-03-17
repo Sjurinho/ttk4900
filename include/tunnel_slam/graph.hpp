@@ -53,6 +53,8 @@ class Graph
         void groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void imuHandler(const sensor_msgs::ImuConstPtr &imuMsg);
 
+        double getCurrentTimeOdometry(void) const { return timeOdometry; }
+
         void runOnce();
         void runSmoothing();
     private:
@@ -65,9 +67,10 @@ class Graph
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
+        ros::Time timer;
 
         // Optimization parameters
-        bool smoothingEnabledFlag=false;
+        bool smoothingEnabledFlag=true;
         double voxelRes = 0.3;
         int smoothingFrames = 10;
 
@@ -93,7 +96,7 @@ class Graph
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames;
+        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames, newCloudsQueue;
         pcl::PointCloud<pcl::PointNormal>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
         pcl::octree::OctreePointCloudSearch<pcl::PointNormal>::Ptr octreeMap;
 
@@ -120,8 +123,6 @@ class Graph
         void _publishTransformed();
         void _fromPointXYZRPYToPose3(const PointXYZRPY &poseIn, gtsam::Pose3 &poseOut);
         void _fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut);
-        void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter);
-        void _applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame);
         void _cloud2Map();
         void _initializePreintegration();
         void _preintegrateImuMeasurements();
