@@ -7,13 +7,15 @@
                 "path": [
                     "/opt/ros/melodic/include",
                     "/home/sjurinho/master_ws/src/tunnel_slam/include",
-                    "/usr/include"
+                    "/usr/include",
+                    "/home/sjurgw/master_ws/src/tunnel_slam/include"
                 ]
             },
             "includePath": [
                 "/opt/ros/melodic/include/**",
                 "/home/sjurinho/master_ws/src/tunnel_slam/include/**",
-                "/usr/include/**"
+                "/usr/include/**",
+                "/home/sjurgw/master_ws/src/tunnel_slam/include/**"
             ],
             "name": "ROS",
             "cppStandard": "c++11"
