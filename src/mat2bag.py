@@ -65,7 +65,7 @@ def mat2GTData(filename):
     
 
 def mat2bag(bagname, freq=15):
-    filename = '../data/simpleTunnel_IMU/SimpleTunnel_IMU_straightPath_ds.mat'
+    filename = '../data/simpleTunnel_IMU/SimpleTunnel_IMU_swigglyPath_ds.mat'
     scans, times, freq = mat2pointcloud(filename)
     imuData = mat2ImuData(filename)
     gtData = mat2GTData(filename)
@@ -158,7 +158,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
 
 def main():
     rospy.init_node('data2bag')
-    mat2bag('../data/simpleTunnel_easyPath_IMU.bag')
+    mat2bag('../data/simpleTunnel_swirlyPath_IMU.bag')
     #csv2bag('real.bag')
 if __name__ == '__main__':
 	main()

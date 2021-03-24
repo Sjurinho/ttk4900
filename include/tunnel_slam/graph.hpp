@@ -67,6 +67,7 @@ class Graph
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
+        ros::Publisher pubReworkedMap;
         ros::Time timer;
 
         // Optimization parameters
@@ -78,13 +79,14 @@ class Graph
         float fxTol = 0.05;
         double stepTol = 1e-5;
 
+        double vel = 0;
 
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
-        gtsam::Values initialEstimate, isamCurrentEstimate;
+        gtsam::Values initialEstimate, isamCurrentEstimate, smoothMapEstimate;
         gtsam::ISAM2* isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, CVNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
@@ -96,9 +98,12 @@ class Graph
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames, newCloudsQueue;
+        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames;
+        int cloudsInQueue = 0;
         pcl::PointCloud<pcl::PointNormal>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
+        pcl::PointCloud<pcl::PointXYZ>::Ptr reworkedMap;
         pcl::octree::OctreePointCloudSearch<pcl::PointNormal>::Ptr octreeMap;
+        std::vector<std::pair<gtsam::Key, int>> mapKeys;
 
 
         double disp[6] = { 0 }; // [roll, pitch, yaw, x, y, z]
@@ -110,7 +115,7 @@ class Graph
         gtsam::imuBias::ConstantBias prevImuBias;
         std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements;
 
-        double timeOdometry, timeMap, timePrevPreintegratedImu = 0;
+        double timeOdometry, timeMap, timePrevPreintegratedImu, dt, dt_prev = 0;
         bool newLaserOdometry, newMap, newGroundPlane, newImu, updateImu = false;
 
         void _incrementPosition();
@@ -127,5 +132,6 @@ class Graph
         void _initializePreintegration();
         void _preintegrateImuMeasurements();
         void _processIMU();
+        void _publishReworkedMap();
 };
 #endif

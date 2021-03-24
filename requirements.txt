@@ -5,8 +5,6 @@ camera-calibration==1.15.0
 camera-calibration-parsers==1.11.13
 catkin==0.7.29
 catkin-pkg==0.4.23
-controller-manager==0.18.3
-controller-manager-msgs==0.18.3
 cv-bridge==1.13.0
 cycler==0.10.0
 diagnostic-analysis==1.9.7
@@ -15,8 +13,6 @@ diagnostic-updater==1.9.7
 distro==1.5.0
 docutils==0.16
 dynamic-reconfigure==1.6.3
-gazebo-plugins==2.8.7
-gazebo-ros==2.8.7
 gencpp==0.6.5
 geneus==2.2.6
 genlisp==0.4.16
