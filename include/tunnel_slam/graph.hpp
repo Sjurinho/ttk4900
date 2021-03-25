@@ -18,6 +18,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -54,6 +55,7 @@ class Graph
         void mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void imuHandler(const sensor_msgs::ImuConstPtr &imuMsg);
+        void gnssHandler(const geometry_msgs::PoseStampedConstPtr &gnssMsg);
 
         double getCurrentTimeOdometry(void) const { return timeOdometry; }
 
@@ -67,6 +69,7 @@ class Graph
         ros::Subscriber subOdometry;
         ros::Subscriber subMap, subGroundPlane;
         ros::Subscriber subImu;
+        ros::Subscriber subGnss;
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
@@ -74,53 +77,58 @@ class Graph
         ros::Time timer;
 
         // Optimization parameters
-        bool smoothingEnabledFlag=true;
+        bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true;
         double voxelRes = 0.3;
-        double keyFrameSaveDistance = 3;
+        double keyFrameSaveDistance = 5;
+        double minCorresponendencesStructure = 10;
+        int cloudsInQueue = 0;
 
         int maxIterSmoothing = 10;
         float fxTol = 0.05;
         double stepTol = 1e-5;
+        double delayTol = 1;
 
-        double vel = 0;
+        bool imuInitialized, imuFactorAdded = false;
+        std::mutex mtx;
 
+        double timeOdometry, timeMap, timePrevPreintegratedImu = 0;
+        bool newLaserOdometry, newMap, newGroundPlane, 
+            newImu, updateImu, newGnss = false;
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
-        gtsam::Values initialEstimate, isamCurrentEstimate, smoothMapEstimate;
-        gtsam::ISAM2 *isam, *isamMap;
+        gtsam::Values initialEstimate, isamCurrentEstimate;
+        gtsam::ISAM2 *isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, gnssNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
 
         pcl::VoxelGrid<pointT> downSizeFilterMap;
-        std::mutex mtx;
         pcl::PointXYZ previousPosPoint, currentPosPoint;
         pcl::PointCloud<pointT>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
         std::vector<pcl::PointCloud<pointT>::Ptr> cloudKeyFrames;
-        int cloudsInQueue = 0;
         pcl::PointCloud<pointT>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
         pcl::PointCloud<pcl::PointXYZ>::Ptr reworkedMap;
         pcl::octree::OctreePointCloudSearch<pointT>::Ptr octreeMap;
         std::vector<std::pair<gtsam::Key, int>> mapKeys;
 
-
-        double disp[6] = { 0 }; // [roll, pitch, yaw, x, y, z]
         gtsam::Pose3 currentPoseInWorld, lastPoseInWorld = gtsam::Pose3::identity();
         gtsam::Pose3 displacement;
 
         std::shared_ptr<gtsam::PreintegrationType> preintegrated;
         gtsam::NavState prevImuState, predImuState;
         gtsam::imuBias::ConstantBias prevImuBias;
-        std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements;
+        std::deque<std::pair<double, gtsam::Pose3>> odometryMeasurements, timeKeyPosePairs; // [time, measurement]
+        std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements; // [time, measurement]
+        std::deque<std::pair<double, gtsam::Pose3>> gnssMeasurements; // [time, measurement]
+        std::deque<std::pair<gtsam::Key, gtsam::Pose3>> keyGnssMeasurementPair;
 
-        double timeOdometry, timeMap, timePrevPreintegratedImu, dt, dt_prev = 0;
-        bool newLaserOdometry, newMap, newGroundPlane, newImu, updateImu = false;
 
+        
         void _incrementPosition();
         void _lateralEstimation();
         void _transformMapToWorld();
@@ -132,8 +140,9 @@ class Graph
         void _fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut);
         void _cloud2Map();
         void _initializePreintegration();
-        void _preintegrateImuMeasurements();
-        void _processIMU();
+        void _preProcessIMU();
+        void _postProcessIMU();
         void _publishReworkedMap();
+        void _preProcessGNSS();
 };
 #endif
