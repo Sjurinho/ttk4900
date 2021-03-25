@@ -25,6 +25,8 @@ int main(int argc, char** argv)
         rate.sleep();
     }
     smoothThread.join();
+    std::cout << "SHUTTING DOWN - SAVING GRAPH" << std::endl;
+    node.writeToFile();
     return 0;
 
 }
