@@ -32,6 +32,8 @@
 
 
 // POINT TYPE FOR REGISTERING ENTIRE POSE
+typedef pcl::PointXYZ pointT;
+
 struct PointXYZRPY{
     PCL_ADD_POINT4D;
     float roll;
@@ -57,6 +59,7 @@ class Graph
 
         void runOnce();
         void runSmoothing();
+        void writeToFile();
     private:
         void _smoothPoses();
         // ROS Members
@@ -73,7 +76,7 @@ class Graph
         // Optimization parameters
         bool smoothingEnabledFlag=true;
         double voxelRes = 0.3;
-        int smoothingFrames = 10;
+        double keyFrameSaveDistance = 3;
 
         int maxIterSmoothing = 10;
         float fxTol = 0.05;
@@ -84,25 +87,25 @@ class Graph
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
         gtsam::Values initialEstimate, isamCurrentEstimate, smoothMapEstimate;
-        gtsam::ISAM2* isam;
+        gtsam::ISAM2 *isam, *isamMap;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, CVNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
 
-        pcl::VoxelGrid<pcl::PointNormal> downSizeFilterSurroundingKeyPoses;
+        pcl::VoxelGrid<pointT> downSizeFilterMap;
         std::mutex mtx;
         pcl::PointXYZ previousPosPoint, currentPosPoint;
-        pcl::PointCloud<pcl::PointNormal>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
+        pcl::PointCloud<pointT>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames;
+        std::vector<pcl::PointCloud<pointT>::Ptr> cloudKeyFrames;
         int cloudsInQueue = 0;
-        pcl::PointCloud<pcl::PointNormal>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
+        pcl::PointCloud<pointT>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
         pcl::PointCloud<pcl::PointXYZ>::Ptr reworkedMap;
-        pcl::octree::OctreePointCloudSearch<pcl::PointNormal>::Ptr octreeMap;
+        pcl::octree::OctreePointCloudSearch<pointT>::Ptr octreeMap;
         std::vector<std::pair<gtsam::Key, int>> mapKeys;
 
 
@@ -122,7 +125,6 @@ class Graph
         void _lateralEstimation();
         void _transformMapToWorld();
         void _transformToGlobalMap(); // Adds to the octree structure and fullmap simultaneously
-        void _createKeyFramesMap();
         void _performIsam();
         void _publishTrajectory();
         void _publishTransformed();

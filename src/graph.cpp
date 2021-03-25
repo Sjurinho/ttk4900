@@ -5,6 +5,7 @@
 #include <pcl/octree/octree_pointcloud_changedetector.h>
 #include <pcl/registration/correspondence_estimation.h>
 #include <pcl/registration/correspondence_rejection_trimmed.h>
+#include <pcl/registration/correspondence_rejection_var_trimmed.h>
 #include <pcl/registration/correspondence_rejection_sample_consensus.h>
 
 
@@ -21,7 +22,6 @@
 #include <gtsam/nonlinear/ExpressionFactorGraph.h>
 #include <gtsam/geometry/BearingRange.h>
 #include <gtsam/slam/SmartProjectionPoseFactor.h>
-
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
@@ -101,26 +101,25 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     parameters.relinearizeThreshold = 0.01;
     parameters.relinearizeSkip      = 1;
     isam = new gtsam::ISAM2(parameters);
+    isamMap = new gtsam::ISAM2(parameters);
 
     gtsam::Vector6 Sigmas(6);
-    Sigmas << 0.05, 0.05, 1e-3, 0.1, 0.1, 0.3; // rad, rad, rad, m, m, m
+    Sigmas << 0.05, 0.05, 1e-3, 0.05, 0.05, 0.1; // rad, rad, rad, m, m, m
     gtsam::Vector6 imuSigmas(6);
-    imuSigmas << 0.01, 0.01, 0.01, 0.1, 0.1, 0.3; // rad, rad, rad, m, m, m
+    imuSigmas << 5e-4, 5e-4, 5e-4, 0.01, 0.01, 0.05; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
-    structureSigmas << 0.05, 0.05 ,0.05; //m, m, m
+    structureSigmas << 0.5, 0.5, 0.5; //m, m, m
 
-    gtsam::Vector6 CVSigmas(6);
-    CVSigmas << 0.5, 0.5, 0.5, 0, 0, 0;
+    downSizeFilterMap.setLeafSize(voxelRes, voxelRes, voxelRes);
 
     cloudKeyPositions.reset(new pcl::PointCloud<pcl::PointXYZ>());
-    reworkedMap.reset(new pcl::PointCloud<pcl::PointXYZ>());
-    currentFeatureCloud.reset(new pcl::PointCloud<pcl::PointNormal>());
-    currentGroundPlaneCloud.reset(new pcl::PointCloud<pcl::PointNormal>());
+    currentFeatureCloud.reset(new pcl::PointCloud<pointT>());
+    currentGroundPlaneCloud.reset(new pcl::PointCloud<pointT>());
     cloudKeyPoses.reset(new pcl::PointCloud<PointXYZRPY>());
-    localKeyFramesMap.reset(new pcl::PointCloud<pcl::PointNormal>());
-    cloudMapFull.reset(new pcl::PointCloud<pcl::PointNormal>());
+    localKeyFramesMap.reset(new pcl::PointCloud<pointT>());
+    cloudMapFull.reset(new pcl::PointCloud<pointT>());
 
-    octreeMap.reset(new pcl::octree::OctreePointCloudSearch<pcl::PointNormal>(voxelRes));
+    octreeMap.reset(new pcl::octree::OctreePointCloudSearch<pointT>(voxelRes));
     octreeMap->setInputCloud(cloudMapFull);
 
     priorNoise = gtsam::noiseModel::Diagonal::Variances(Sigmas);
@@ -130,7 +129,6 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.1); // m/s
     imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
     structureNoise = gtsam::noiseModel::Diagonal::Variances(structureSigmas);
-    CVNoise = gtsam::noiseModel::Diagonal::Variances(CVSigmas);
 
     gtsam::imuBias::ConstantBias priorImuBias; //assumed zero
 
@@ -149,12 +147,12 @@ Graph::~Graph()
 void Graph::_transformToGlobalMap()
 {   
 
-    pcl::PointCloud<pcl::PointNormal> currentInWorld;
+    pcl::PointCloud<pointT> currentInWorld;
 
     pcl::transformPointCloud(*currentFeatureCloud, currentInWorld, currentPoseInWorld.matrix());
     
     std::vector<int> newPointIdxVector;
-    pcl::octree::OctreePointCloudChangeDetector<pcl::PointNormal> changeDetector(voxelRes);
+    pcl::octree::OctreePointCloudChangeDetector<pointT> changeDetector(voxelRes);
     changeDetector.setInputCloud(cloudMapFull);
     changeDetector.addPointsFromInputCloud();
     changeDetector.switchBuffers();
@@ -227,7 +225,7 @@ void Graph::_performIsam()
     +(previousPosPoint.y-currentPosPoint.y)*(previousPosPoint.y-currentPosPoint.y)
     +(previousPosPoint.z-currentPosPoint.z)*(previousPosPoint.z-currentPosPoint.z);
 
-    if (sqrt(squaredDistance) < 0.3){
+    if (sqrt(squaredDistance) < keyFrameSaveDistance){
         saveThisKeyFrame = false;
     }
 
@@ -304,30 +302,15 @@ void Graph::_performIsam()
 
     lastPoseInWorld = currentPoseInWorld;
 
-    pcl::PointCloud<pcl::PointNormal>::Ptr thisKeyFrame(new pcl::PointCloud<pcl::PointNormal>());
-    pcl::copyPointCloud(*currentFeatureCloud, *thisKeyFrame);
+    pcl::PointCloud<pointT>::Ptr thisKeyFrame(new pcl::PointCloud<pointT>());
+    //pcl::copyPointCloud(*currentFeatureCloud, *thisKeyFrame);
+    downSizeFilterMap.setInputCloud(currentFeatureCloud);
+    downSizeFilterMap.filter(*thisKeyFrame);
     cloudKeyFrames.push_back(thisKeyFrame);
     cloudsInQueue += 1;
 }
 
-void Graph::_createKeyFramesMap(){
-    if (cloudKeyFrames.size() < smoothingFrames) return;
-    localKeyFramesMap->clear();
-    for (int i = 0; i<smoothingFrames; i++){
-        int frameID = cloudKeyFrames.size() - smoothingFrames + i;
-        PointXYZRPY poseInFrame = cloudKeyPoses->at(frameID);
-        gtsam::Vector3 rotVec(poseInFrame.roll, poseInFrame.pitch, poseInFrame.yaw);
-        gtsam::Point3 trans(poseInFrame.x, poseInFrame.y, poseInFrame.z);
-        gtsam::Rot3 orientation = gtsam::Rot3::RzRyRx(rotVec);
-        gtsam::Pose3 pose = gtsam::Pose3(orientation, trans);
-
-        pcl::PointCloud<pcl::PointNormal> keyFrameInWorld;
-        pcl::transformPointCloud(*cloudKeyFrames[i], keyFrameInWorld, pose.matrix());
-        *localKeyFramesMap += keyFrameInWorld;
-    }
-}
-
-void Graph::_lateralEstimation()
+/*void Graph::_lateralEstimation()
 {
     double normalMean[3] = { 0.0 };
     for (auto gpPoint : currentGroundPlaneCloud->points){
@@ -349,81 +332,87 @@ void Graph::_lateralEstimation()
     float deltaPitch = acos(1-normalMean[2]) - M_PI/2;
     float deltaRoll = acos(normalMean[0]) - M_PI/2;
     //#TODO: FINISH/DECIDE WHETHER OR NOT TO USE THIS
-}
+}*/
 
 void Graph::_smoothPoses(){
-    auto skewSymmetric = [](double a, double b, double c){return gtsam::skewSymmetric(a, b, c);};
-
     mtx.lock();
     if (cloudsInQueue==0){
         mtx.unlock();
         return;
     }
     int startIdx = cloudKeyFrames.size() - cloudsInQueue;
+    int cloudsInQueueAtRunTime = cloudsInQueue;
 
     std::vector<gtsam::Pose3> framePoses;
-    for (int i = startIdx; i<startIdx + cloudsInQueue; i++)
+    for (int i = startIdx; i<startIdx + cloudsInQueueAtRunTime; i++)
     {
         framePoses.push_back(isamCurrentEstimate.at<gtsam::Pose3>(X(i)));
     }
-    pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal> matcher;
+    pcl::registration::CorrespondenceEstimation<pointT, pointT> matcher;
     matcher.setInputTarget(cloudMapFull);
-    pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointNormal> trimmer;
+    pcl::registration::CorrespondenceRejectorSampleConsensus<pointT> trimmer;
     trimmer.setInputTarget(cloudMapFull);
+    //pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     mtx.unlock();
+
+    //trimmer.setOverlapRatio(0.4);
+    trimmer.setMaximumIterations(500);
+    trimmer.setRefineModel(true);
 
     gtsam::ExpressionFactorGraph graph;
     gtsam::Values initial;
-    for (int cloudnr = startIdx; cloudnr < startIdx + cloudsInQueue; cloudnr++){
-        pcl::PointCloud<pcl::PointNormal> cloudInWorld;
-        pcl::PointCloud<pcl::PointNormal> cloud = *cloudKeyFrames.at(cloudnr);
-        pcl::transformPointCloud(cloud, cloudInWorld, framePoses[cloudnr].matrix());
+    for (int cloudnr = startIdx; cloudnr < startIdx + cloudsInQueueAtRunTime; cloudnr++){
+        gtsam::Pose3 pose = framePoses[cloudnr-startIdx];
+
+        pcl::PointCloud<pointT> cloudInWorld, filteredCloud;
+        pcl::PointCloud<pointT> cloud = *cloudKeyFrames.at(cloudnr);
+
+        pcl::transformPointCloud(cloud, cloudInWorld, pose.matrix());
+
         pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
         matcher.setInputSource(cloudInWorld.makeShared());
-        matcher.determineReciprocalCorrespondences(*allCorrespondences); 
+        matcher.determineReciprocalCorrespondences(*allCorrespondences, 0.5); 
 
-        pcl::CorrespondencesPtr ransacCorrespondences(new pcl::Correspondences);
+        pcl::CorrespondencesPtr trimmedCorrespondences(new pcl::Correspondences);
         trimmer.setInputSource(cloudInWorld.makeShared());
         trimmer.setInputCorrespondences(allCorrespondences);
-        trimmer.setInlierThreshold(0.2);
-        trimmer.setMaximumIterations(1000);
-        trimmer.setRefineModel(true);
         
-        trimmer.getCorrespondences(*ransacCorrespondences);
-        if (ransacCorrespondences->empty() || ransacCorrespondences->size() < 10) continue;
-        gtsam::Pose3 pose = framePoses[cloudnr];
-        std::cout << "MAP CORRESPONDENCES: " << ransacCorrespondences->size() << std::endl;
-        for (int j = 0; j<ransacCorrespondences->size(); j++){
+        trimmer.getCorrespondences(*trimmedCorrespondences);
+        if (trimmedCorrespondences->size() < 50) continue;
+        std::cout << "MAP CORRESPONDENCES: " << trimmedCorrespondences->size() << std::endl;
+        for (int j = 0; j<trimmedCorrespondences->size(); j++){
 
-            int pointIdx = ransacCorrespondences->at(j).index_match;
-            pcl::PointNormal pclPoint = cloudMapFull->at(pointIdx);
+            int pointIdx = trimmedCorrespondences->at(j).index_match;
+            pointT pclPoint = cloudMapFull->at(pointIdx);
             gtsam::Point3 pointWorld = gtsam::Point3(pclPoint.x, pclPoint.y, pclPoint.y);
-            pcl::PointNormal pclPointFrame = cloudInWorld.at(ransacCorrespondences->at(j).index_query);
+            pointT pclPointFrame = cloudInWorld.at(trimmedCorrespondences->at(j).index_query);
             gtsam::Point3 pointMeasured = gtsam::Point3(pclPointFrame.x, pclPointFrame.y, pclPointFrame.z);
             /*auto prediction = gtsam::Expression<BearingRange3D>
             (BearingRange3D::Measure, gtsam::Pose3_(X(cloudnr)), gtsam::Point3_(L(pointIdx)));*/
             auto prediction = gtsam::Expression<BearingRange3D>
             (BearingRange3D::Measure, gtsam::Pose3_(X(cloudnr)), gtsam::Point3_(L(pointIdx)));
             auto measurement = BearingRange3D(pose.bearing(pointMeasured), pose.range(pointMeasured));
-            //std::cout << "Position: " << pose.translation() << " Point: " << pointMeasured << " bearing: " << pose.bearing(pointMeasured) << " range: " << pose.range(pointMeasured) << std::endl;
+
             graph.addExpressionFactor(prediction, measurement, structureNoise);
-            try{
-                if (!isamCurrentEstimate.exists(L(pointIdx))) {
-                    initial.insert(L(pointIdx), pointMeasured);
-                    mapKeys.push_back(std::make_pair(L(pointIdx), pointIdx));
-                }
+            if (!isamCurrentEstimate.exists(L(pointIdx)) && !initial.exists(L(pointIdx))) {
+                initial.insert(L(pointIdx), pointMeasured);
+                mapKeys.push_back(std::make_pair(L(pointIdx), pointIdx));
             }
-            catch (...) {
-                continue;
-            }
+            /*if (!smoothMapEstimate.exists(L(pointIdx))){
+                initial.insert(L(pointIdx), pointMeasured);
+                mapKeys.push_back(std::make_pair(L(pointIdx), pointIdx));
+            }*/
         }
-        /*if (cloudnr > 0){
+        /*
+        if (cloudnr > startIdx){
             graph.addExpressionFactor(gtsam::between(gtsam::Pose3_(X(cloudnr-1)), gtsam::Pose3_(X(cloudnr))), framePoses[cloudnr-1].between(framePoses[cloudnr]), imuPoseNoise);
-        }*/
-        //initial.insert(X(cloudnr), framePoses[cloudnr]);
+        }
+        initial.insert(X(cloudnr), framePoses[cloudnr]);*/
     }
-    //std::cout << "initial error: " << graph.error(initial) << std::endl;
-    //smoothMapEstimate = gtsam::LevenbergMarquardtOptimizer(graph, initial).optimize();
+    /*std::cout << "initial error: " << graph.error(initial) << std::endl;
+    isamMap->update(graph, initial);
+    isamMap->update();
+    smoothMapEstimate = isamMap->calculateEstimate();*/
     mtx.lock();
     cloudsInQueue = 0;
     isam->update(graph, initial);
@@ -431,13 +420,12 @@ void Graph::_smoothPoses(){
     isamCurrentEstimate = isam->calculateEstimate();
     /*for (auto key : mapKeys){
         gtsam::Point3 point = isamCurrentEstimate.at<gtsam::Point3>(key.first);
-        pcl::PointNormal pclpoint;
+        pointT pclpoint;
         pclpoint.x = point.x(); pclpoint.y = point.y(); pclpoint.z = point.z();
         cloudMapFull->at(key.second) = pclpoint;
     }*/
     mtx.unlock();
     //smoothMapEstimate = isam->calculateEstimate();
-    //std::cout << "final error: " << graph.error(smoothMapEstimate) << std::endl;
     //graph.keys().print();
     //_publishReworkedMap(keys);
 }
@@ -465,7 +453,7 @@ void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
 
 void Graph::mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 {   
-    pcl::PointCloud<pcl::PointNormal> tmp;
+    pcl::PointCloud<pointT> tmp;
     pcl::fromROSMsg(*pointCloud2Msg, tmp);
     mtx.lock();
     timeMap = pointCloud2Msg->header.stamp.toSec();
@@ -476,7 +464,7 @@ void Graph::mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 
 void Graph::groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg)
 {   
-    pcl::PointCloud<pcl::PointNormal> tmp;
+    pcl::PointCloud<pointT> tmp;
     pcl::fromROSMsg(*pointCloud2Msg, tmp);
     mtx.lock();
     *currentGroundPlaneCloud = tmp;
@@ -502,7 +490,7 @@ void Graph::_cloud2Map(){
     if (cloudKeyFrames.size() < 1) return;
 
     pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
-    pcl::registration::CorrespondenceEstimation<pcl::PointNormal, pcl::PointNormal> matcher;
+    pcl::registration::CorrespondenceEstimation<pointT, pointT> matcher;
 
     pcl::CorrespondencesPtr partialOverlapCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
@@ -510,8 +498,8 @@ void Graph::_cloud2Map(){
     trimmer.setOverlapRatio(0.8);
 
 
-    pcl::PointCloud<pcl::PointNormal> framePoints = *currentFeatureCloud;
-    pcl::PointCloud<pcl::PointNormal> frameInWorld;
+    pcl::PointCloud<pointT> framePoints = *currentFeatureCloud;
+    pcl::PointCloud<pointT> frameInWorld;
 
     if (updateImu){
         pcl::transformPointCloud(framePoints, frameInWorld, predImuState.pose().matrix());
@@ -553,9 +541,9 @@ void Graph::_cloud2Map(){
         for (int j = 0; j < nPoints; j++){
             int sourceIndex = partialOverlapCorrespondences->at(j).index_query;
             int targetIndex = partialOverlapCorrespondences->at(j).index_match;
-            pcl::PointNormal pointInWorld = frameInWorld.at(sourceIndex);
-            pcl::PointNormal pointInLocalFrame = framePoints.at(sourceIndex);
-            pcl::PointNormal matchedPointMap = cloudMapFull->at(targetIndex);
+            pointT pointInWorld = frameInWorld.at(sourceIndex);
+            pointT pointInLocalFrame = framePoints.at(sourceIndex);
+            pointT matchedPointMap = cloudMapFull->at(targetIndex);
             //#TODO: Extract points first, then do optimization?
 
             // Extract points
@@ -674,20 +662,18 @@ void Graph::_cloud2Map(){
             priorMatB.at<double>(5, 0) = whitenedPrior(5);
         }
 
+        // Solve using Levenberg Marquardt
         cv::transpose(matA, matAt);
         matAtA = matAt * matA;
         auto matAtAdiag = cv::Mat::diag(matAtA.diag());
         matAtB = matAt * matB;
         cv::solve(matAtA + (lambda * matAtAdiag), matAtB, matX, cv::DECOMP_QR);
 
-        //std::cout << matA << std::endl;
-
         // Check Update
         gtsam::Pose3 keyPoseBefore = currentPoseInWorld;
 
         gtsam::Vector6 xi;
         xi << matX.at<double>(0, 0), matX.at<double>(1, 0), matX.at<double>(2, 0), matX.at<double>(3, 0), matX.at<double>(4, 0), matX.at<double>(5, 0);
-        //std::cout << cv::norm(matX) << std::endl;
 
         gtsam::Pose3 tau = gtsam::Pose3::Expmap(xi);
 
@@ -698,30 +684,13 @@ void Graph::_cloud2Map(){
         double fxResult = 0;
 
         for (int i = 0; i < nPoints; i++){
-            //gtsam::Point3 pointCorrection = gtsam::Point3(matX.at<double>(poseD + pointD * i, 0), matX.at<double>(poseD + pointD * i + 1, 0), matX.at<double>(poseD + pointD * i + 2, 0));
             gtsam::Point3 q_wj = worldPoints[i];
             gtsam::Point3 p_Lij = localPoints[i];
 
             fxBefore += pow(gtsam::norm3(keyPoseBefore * p_Lij - q_wj), 2);
-            //fxAfter += pow(gtsam::norm3(keyPoseAfter * (p_Lij + pointCorrection) - q_wj), 2);
             fxAfter += pow(gtsam::norm3(keyPoseAfter * p_Lij - q_wj), 2);
         }
-        auto streng = "BEFORE: " + std::to_string(fxBefore) + ", AFTER: " + std::to_string(fxAfter);
-        //std::cout << streng << std::endl;
         if (fxAfter < fxBefore){
-            //ROS_INFO("GOOD STEP");
-            //std::lock_guard<std::mutex> lock(mtx);
-            /*for (int i = 0; i < nPoints; i++){ 
-                int sourceIndex = allCorrespondences->at(i).index_query;
-                //std::cout << "BEFORE UPDATE: " << currentFeatureCloud->at(sourceIndex) << std::endl;
-                framePoints.at(sourceIndex).x += matX.at<double>(poseD + pointD * i, 0);
-                framePoints.at(sourceIndex).y += matX.at<double>(poseD + pointD * i + 1, 0);
-                framePoints.at(sourceIndex).z += matX.at<double>(poseD + pointD * i + 2, 0);
-                currentFeatureCloud->at(sourceIndex).x += matX.at<double>(poseD + pointD * i, 0);
-                currentFeatureCloud->at(sourceIndex).y += matX.at<double>(poseD + pointD * i + 1, 0);
-                currentFeatureCloud->at(sourceIndex).z += matX.at<double>(poseD + pointD * i + 2, 0);
-                //std::cout << "AFTER UPDATE: " << currentFeatureCloud->at(sourceIndex) << std::endl;
-            }*/
             currentPoseInWorld = keyPoseAfter;
             lambda /= 10;
             fxResult = fxAfter;
@@ -755,7 +724,6 @@ void Graph::runOnce()
         _processIMU(); 
         //_transformMapToWorld();
         //_lateralEstimation();
-        //_createKeyFramesMap();
 
         _cloud2Map();
         
@@ -764,9 +732,10 @@ void Graph::runOnce()
         _performIsam();
 
         _publishTransformed();
-        mtx.unlock();
-        
+
         _publishTrajectory();
+        
+        mtx.unlock();
         
     }
 }
@@ -788,7 +757,7 @@ void Graph::runSmoothing()
 {
     if (smoothingEnabledFlag == false) return;
     ros::Rate rate(1);
-    while (ros::ok){
+    while (ros::ok()){
         _smoothPoses();
         _publishReworkedMap();
         rate.sleep();
@@ -797,7 +766,7 @@ void Graph::runSmoothing()
 
 void Graph::_transformMapToWorld()
 {
-    pcl::PointCloud<pcl::PointNormal> currentInWorld;
+    pcl::PointCloud<pointT> currentInWorld;
     pcl::transformPointCloud(*currentFeatureCloud, currentInWorld, currentPoseInWorld.matrix());
     /*for (auto &it : currentInWorld.points){
         octreeMap->addPointToCloud(it, cloudKeyFramesMap);
@@ -808,13 +777,13 @@ void Graph::_transformMapToWorld()
         *cloudMapFull += currentInWorld;
         return;
     }
-    pcl::PointCloud<pcl::PointNormal>::Ptr currentMap(new pcl::PointCloud<pcl::PointNormal>(*cloudMapFull));
-    pcl::KdTreeFLANN<pcl::PointNormal> kdTree;
+    pcl::PointCloud<pointT>::Ptr currentMap(new pcl::PointCloud<pointT>(*cloudMapFull));
+    pcl::KdTreeFLANN<pointT> kdTree;
     kdTree.setInputCloud(cloudMapFull);
     std::vector<int> indices;
     std::vector<float> distances;
     for (auto &it : currentInWorld.points){
-        if (!pcl::isFinite<pcl::PointNormal>(it)) continue;
+        if (!pcl::isFinite<pointT>(it)) continue;
 
         if (kdTree.nearestKSearch(it, 1, indices, distances) > 0) {
             if (sqrt(distances[0]) > 0.5){
@@ -827,19 +796,21 @@ void Graph::_transformMapToWorld()
     }
     
 }
-// FOR VISUALIZATION
+
 void Graph::_publishTransformed()
 {
+    // Publish the entire map
     if (pubTransformedMap.getNumSubscribers() > 0){
         sensor_msgs::PointCloud2 msg;
         pcl::toROSMsg(*cloudMapFull, msg);
         msg.header.frame_id = "map";
         pubTransformedMap.publish(msg);
     }
+
+    // Publish the newest pose from the ISAM2 estimate
     if (pubTransformedPose.getNumSubscribers() > 0){
         geometry_msgs::PoseWithCovarianceStamped poseWCov;
         poseWCov.header.frame_id = "map";
-        //double t = timeOdometry;
         poseWCov.header.stamp = timer.fromSec(timeOdometry);
 
         auto estimate = isamCurrentEstimate.at<gtsam::Pose3>(X(cloudKeyPoses->points.size()-1));
@@ -858,7 +829,6 @@ void Graph::_publishTransformed()
         for (int i=0; i<36; i++){
             row = i / 6;
             col = i % 6;
-            //std::cout << "map[row]: " << map[row] << " map[col]: " << map[col] << std::endl;
             poseWCov.pose.covariance.at(i)= (double) cov(map[row], map[col]);
         }
         pubTransformedPose.publish(poseWCov);
@@ -868,13 +838,14 @@ void Graph::_publishTransformed()
 void Graph::_publishReworkedMap()
 {
     if (pubReworkedMap.getNumSubscribers() > 0){
+        pcl::PointCloud<pointT> reworkedMap;
         sensor_msgs::PointCloud2 msg;
         for (auto key : mapKeys){
             auto gtsampoint = isamCurrentEstimate.at<gtsam::Point3>(key.first);
             auto pclpoint = pcl::PointXYZ(gtsampoint.x(), gtsampoint.y(), gtsampoint.z());
-            reworkedMap->push_back(pclpoint);
+            reworkedMap.push_back(pclpoint);
         }
-        pcl::toROSMsg(*reworkedMap, msg);
+        pcl::toROSMsg(reworkedMap, msg);
         msg.header.frame_id = "map";
         pubReworkedMap.publish(msg);
     }
@@ -882,7 +853,7 @@ void Graph::_publishReworkedMap()
 
 void Graph::_publishTrajectory()
 {
-    if (!(pubPoseArray.getNumSubscribers() > 0)) return;
+    if (!(pubPoseArray.getNumSubscribers() > 0) || cloudKeyPoses->points.size() % 10 != 0) return;
     geometry_msgs::PoseArray poseArray;
     poseArray.header.stamp = timer.now();
     poseArray.header.frame_id = "map";
@@ -923,4 +894,56 @@ void Graph::_fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &pos
     poseOut.roll = poseIn.rotation().roll();
     poseOut.pitch = poseIn.rotation().pitch();
     poseOut.yaw = poseIn.rotation().yaw();
+}
+
+void Graph::writeToFile()
+{   
+    std::ofstream csvFile("/home/sjurinho/master_ws/src/tunnel_slam/data/LatestRun.csv");
+    std::cout << "Failed to open file: " << csvFile.fail() << std::endl;
+    csvFile << "key, landmark(x;y;z), pose(x;y;z;r;p;y;cov[36]), velocity(u;v;w), bias(bu;bv;bw;br;bp;by)\n";
+    for (auto it : isamCurrentEstimate){
+        std::string key = gtsam::DefaultKeyFormatter(it.key);
+        std::string row;
+        switch (key.front()){
+            case 'l':
+            {
+                auto l = it.value.cast<gtsam::Point3>();
+                row = key + "," + std::to_string(l.x()) + ";" + std::to_string(l.y()) + ";" + std::to_string(l.z()) + ", , , ";
+                break;
+            }
+            case 'x':
+            {
+                auto x = it.value.cast<gtsam::Pose3>();
+                auto cov = isam->marginalCovariance(it.key);
+                std::map<int, int> map = {{0, 3}, {1,4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}};
+                
+                row = key + ", ," + std::to_string(x.translation().x()) + ";" + std::to_string(x.translation().y()) + ";" + std::to_string(x.translation().z()) + ";" + std::to_string(x.rotation().roll()) + ";" + std::to_string(x.rotation().pitch()) + ";" + std::to_string(x.rotation().yaw());
+                for (int i = 0; i<36; i++){
+                    int r = i / 6;
+                    int c = i % 6;
+                    std::string s = std::to_string((double) cov(map[r], map[c])) + ";";
+                    row += s;
+                }
+                row += ", , ";
+                break;
+            }
+            case 'v':
+            {
+                auto vel = it.value.cast<gtsam::Velocity3>();
+                row = key + ", , ," + std::to_string(vel(0)) + ";" + std::to_string(vel(1)) + ";" + std::to_string(vel(2)) + ", ";
+                break;
+            }
+            case 'b':
+            {
+                auto bias = it.value.cast<gtsam::imuBias::ConstantBias>();
+                row = key + ", , , ," + std::to_string(bias.accelerometer()(0)) + ";" + std::to_string(bias.accelerometer()(1)) + ";" + std::to_string(bias.accelerometer()(2)) + ";" + std::to_string(bias.gyroscope()(0)) + ";" + std::to_string(bias.gyroscope()(1)) + ";" + std::to_string(bias.gyroscope()(2));
+                break;
+            }
+            default:
+                row = "ERROR, , , , ";
+                break;
+        }
+        csvFile << row + "\n";
+    }
+    csvFile.close();
 }
