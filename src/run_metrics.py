@@ -87,7 +87,7 @@ def bag2numpy(bagname):
                 quat = msg.message.pose.orientation
                 angles = euler_from_quaternion(quat.x, quat.y, quat.z, quat.w)
                 gt_positions.append(positionArr)
-                gt_orientations.append([angles[0], -angles[1], -angles[2]]) # Rotate to correct coordinate system
+                gt_orientations.append([angles[0], angles[1], angles[2]]) # Rotate to correct coordinate system
                 gt_times.append(rospy.Time.to_sec(msg.message.header.stamp))
             elif msg.topic == '/pose':
                 position = msg.message.pose.pose.position
@@ -102,7 +102,7 @@ def bag2numpy(bagname):
     gt = PoseData(np.array(gt_positions), np.array(gt_orientations), np.array(gt_times))
     return est, gt
 
-estimates, gts = bag2numpy('../data/recorded_runs/simpleTunnel_IMU_1.bag')
+estimates, gts = bag2numpy('../data/recorded_runs/simpleTunnel_IMUwithMapOptimization_1.bag')
 
 def plotTrajectory2D(estimates:PoseData, gts:PoseData):
     fig, ax = plt.subplots(num=1, clear=True)
@@ -115,7 +115,6 @@ def plotTrajectory2D(estimates:PoseData, gts:PoseData):
         if i%4 == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
             plot_cov_ellipse2d(ax2, np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
-            print(np.rad2deg(orientation[-1]))
     ax2.plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos')
     ax2.legend()
     
