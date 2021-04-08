@@ -1,9 +1,9 @@
 import numpy as np
 import math
 import scipy.io as sio
-import scipy
 import matplotlib.pyplot as plt
 import matplotlib
+import pandas as pd
 
 import rospy
 import rosbag
@@ -102,25 +102,115 @@ def bag2numpy(bagname):
     gt = PoseData(np.array(gt_positions), np.array(gt_orientations), np.array(gt_times))
     return est, gt
 
-estimates, gts = bag2numpy('../data/recorded_runs/simpleTunnel_IMUwithMapOptimization_1.bag')
+def serialize(data, col:int):
+    serialized = np.array(np.float_(data[0, col].split(';')))
+    for row in data[1:, col]:
+        serialized = np.vstack((serialized, np.float_(row.split(';'))))
+    return serialized
+        
 
-def plotTrajectory2D(estimates:PoseData, gts:PoseData):
-    fig, ax = plt.subplots(num=1, clear=True)
+def csv2numpy(filename: str, other_estimate: PoseData):
+    data = pd.read_csv(filename, delimiter=",")
+    
+    unserializedPoses = data[data["key"].str.contains(pat="x")].to_numpy()
+    unserializedLandmarks = data[data["key"].str.contains(pat="l")].to_numpy()
+    unserializedVelocitites = data[data["key"].str.contains(pat="v")].to_numpy()
+    unserializedBiases = data[data["key"].str.contains(pat="b")].to_numpy()
+    serVelocities = serialize(unserializedVelocitites, 3)
+    serPoses = serialize(unserializedPoses, 2)
+    serLandmarks = serialize(unserializedLandmarks, 1)
+    serBiases = serialize(unserializedBiases, 4)
+
+    estimate_positions=serPoses[:, :3]
+    estimate_orientations=serPoses[:, 3:6]
+    estimate_covariances=serPoses[:, 6:]
+    estimate_times = np.linspace(other_estimate.times[0], other_estimate.times[-1], estimate_positions.shape[0])
+    estimates = PoseData(estimate_positions, estimate_orientations, estimate_times, estimate_covariances.reshape(-1, 6, 6))
+    return estimates, serVelocities, serLandmarks, serBiases
+
+def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim=[-10, 10], ylim=[0, 240]):
+    fig, ax = plt.subplots(clear=True, figsize=(10,10))
+    ax.set_title(title + " Estimate vs Ground Truth")
     ax.plot(estimates.positions[:, 1], estimates.positions[:, 0], label=r'$\hat{x}$')
     ax.plot(gts.positions[:, 1], gts.positions[:, 0], label=r'$x$')
     ax.legend()
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
 
-    fig2, ax2 = plt.subplots(num=2, clear=True)
+    fig2, ax2 = plt.subplots(clear=True, figsize=(10,10))
+    ax2.set_title(title + " Estimate with Covariance")
     for i, (position, orientation, cov) in enumerate(zip(estimates.positions, estimates.orientations, estimates.covariances)):
-        if i%4 == 0:
+        if i%skipPlt == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
             plot_cov_ellipse2d(ax2, np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
-    ax2.plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos')
+    ax2.plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
     ax2.legend()
+    ax2.set_xlim(*xlim)
+    ax2.set_ylim(*ylim)
+    return fig, fig2
+
+def plotExtraStateEstimates(time, velocities, biases):
+    fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10,10))
+    axs[0].set_title("Speed")
+    axs[0].plot(time, np.linalg.norm(velocities, ord=2, axis=1))
+    axs[0].legend([r"$V$"])
+    axs[1].set_title("Accelerometer biases")
+    axs[1].plot(time, biases[:, :3])
+    axs[1].legend([r"$a_{xb}$", r"$a_{yb}$", r"$a_{zb}$"])
+    axs[2].set_title("Gyro biases")
+    axs[2].plot(time, biases[:, 3:])
+    axs[2].legend([r"$p_b$", r"$q_b$", r"$r_b$"])
+    return fig
+
+def plotMapWithTrajectory(positions, landmarks, view_init=[5, 170], xlim=[-1, 250], ylim=[-20, 20], zlim=[-0.2, 30]):
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(projection="3d")
+    ax.set_title("Estimated Map with Trajectory")
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], color="orange")
+    ax.scatter(landmarks[:, 0], landmarks[:, 1], landmarks[:, 2])
+    ax.set_xlim3d(*xlim)
+    ax.set_ylim3d(*ylim)
+    ax.set_zlim3d(*zlim)
+    ax.view_init(*view_init)
+    # Create cubic bounding box to simulate equal aspect ratio
     
+    """xmax = positions[:, 0].max()
+    xmin = positions[:, 0].min()
+    ymax = positions[:, 1].max()
+    ymin = positions[:, 1].min()
+    zmax = positions[:, 2].max()
+    zmin = positions[:, 2].min()
+
+    max_range = np.array([xmax-xmin, ymax-ymin, zmax-zmin]).max()
+    Xb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][0].flatten() + 0.5*(xmax+xmin)
+    Yb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][1].flatten() + 0.5*(ymax+ymin)
+    Zb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][2].flatten() + 0.5*(zmax+ zmin)
+    # Comment or uncomment following both lines to test the fake bounding box:
+    for xb, yb, zb in zip(Xb, Yb, Zb):
+        ax.plot([xb], [yb], [zb], 'w')"""
+    return fig
+
+def main():
+    import os
+    from datetime import datetime
+
+    now = datetime.now()
+    dt_string = now.strftime("%d-%m-%Y_%H:%M:%S")
+    figfolder = f"../data/recorded_runs/python_plots/ImuAndGPS/{dt_string}"
+    if not os.path.isdir(figfolder):
+        os.makedirs(figfolder)
+    estimates, gts = bag2numpy('../data/recorded_runs/simpleTunnel_IMUAndGPSwithMapOptimization_1.bag')
+    estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy("../data/LatestRun.csv", estimates)
+    beforeSmoothingEstVsGt, beforeSmoothingXYWithCov = plotTrajectory2D(estimates, gts, skipPlt=8, ylim=[-1, 300], title="Before Smoothing")
+    afterSmoothingEstVsGt, afterSmoothingXYWithCov = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, ylim=[-1, 300], title="After Smoothing")
+    estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
+    estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
+    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.eps", format='eps')
+    beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.eps", format='eps')
+    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.eps", format='eps')
+    afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.eps", format='eps')
+    estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.eps", format='eps')
+    estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.eps", format='eps')
     plt.show()
-plotTrajectory2D(estimates, gts)
 
-
-
-
+main()

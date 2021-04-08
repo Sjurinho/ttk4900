@@ -25,6 +25,11 @@ class GTData:
         self.ori = gtOri
         self.time = time
 
+class GNSSData:
+    def __init__(self, positions, time):
+        self.pos = positions
+        self.time = time
+
 def euler_to_quaternion(roll, pitch, yaw):
 
         qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
@@ -62,16 +67,23 @@ def mat2GTData(filename):
     Ori = m['simple_tunnel_ds']['Thetagt']['signals']['values'].T
     time = m['simple_tunnel_ds']['Pgt']['time'].T
     return GTData(Pos, Ori, time)
-    
+
+def mat2GNSSData(filename):
+    m = sio.loadmat(filename, simplify_cells=True)
+    gnss_pos = m['simple_tunnel_ds']['gnss']['measurements']
+    gnss_time = m['simple_tunnel_ds']['gnss']['times']
+    print(gnss_pos)
+    return GNSSData(gnss_pos, gnss_time)
 
 def mat2bag(bagname, freq=15):
-    filename = '../data/simpleTunnel_IMU/SimpleTunnel_IMU_swigglyPath_ds.mat'
+    filename = '../data/simpleTunnel_IMU/SimpleTunnel_IMUGPS_straightPath_ds.mat'
     scans, times, freq = mat2pointcloud(filename)
     imuData = mat2ImuData(filename)
     gtData = mat2GTData(filename)
+    gnssData = mat2GNSSData(filename)
 
     rate = rospy.Rate(freq) #15Hz
-    write_bag(scans, times, bagname, rate, useImu=True, imuData=imuData, useGroundTruth=True, groundTruthData=gtData)
+    write_bag(scans, times, bagname, rate, useImu=True, imuData=imuData, useGroundTruth=True, groundTruthData=gtData, useGNSS=True, GNSSData=gnssData)
 
 def csv2bag(bagname, freq=15):
     scans = csv2pointcloud('datasets/2704/towards_column.csv', 271)#811)
@@ -79,12 +91,13 @@ def csv2bag(bagname, freq=15):
     rate = rospy.Rate(freq) #15Hz
     #write_bag(scans, bagname, rate)
 
-def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuData=None, useGroundTruth=False, groundTruthData:GTData=None):
+def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuData=None, useGroundTruth=False, groundTruthData:GTData=None, useGNSS=True, GNSSData: GNSSData=None):
     n_start = 0
     n_scans = scans.shape[2]
     n_imu = imuData.time.shape[0] if imuData != None else 0
+    n_gnss = GNSSData.time.shape[0] if GNSSData != None else 0
     n_gt = groundTruthData.time.shape[0] if groundTruthData != None else 0
-    print(f'n_scans: {n_scans}, n_imu: {n_imu}, n_gt: {n_gt}')
+    print(f'n_scans: {n_scans}, n_imu: {n_imu}, n_gt: {n_gt}, n_gnss: {n_gnss}')
     with rosbag.Bag(bagname, 'w') as bag:
         for n in range(n_start, n_scans):
             try:
@@ -118,6 +131,25 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
                     imuMsg.linear_acceleration = linAcc
                     
                     bag.write('/imu', imuMsg, imuMsg.header.stamp)
+                except:
+                    bag.close()
+                    rospy.signal_shutdown("Bag error during writing imu")
+                    exit()
+        if useGNSS:
+            for n in range(n_start, n_gnss):
+                try:
+                    gnssMsg = PoseStamped()
+                    position = Point()
+                    
+                    position.x = GNSSData.pos[n, 0]
+                    position.y = GNSSData.pos[n, 1]
+                    position.z = GNSSData.pos[n, 2]
+                    
+                    gnssMsg.header.stamp = rospy.Time.from_sec(GNSSData.time[n])
+                    gnssMsg.header.frame_id = 'world'
+                    gnssMsg.pose.position = position
+                    
+                    bag.write('/gnss', gnssMsg, gnssMsg.header.stamp)
                 except:
                     bag.close()
                     rospy.signal_shutdown("Bag error during writing imu")
@@ -158,7 +190,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
 
 def main():
     rospy.init_node('data2bag')
-    mat2bag('../data/simpleTunnel_swirlyPath_IMU.bag')
+    mat2bag('../data/simpleTunnel_straightPath_IMUGNSS.bag')
     #csv2bag('real.bag')
 if __name__ == '__main__':
 	main()

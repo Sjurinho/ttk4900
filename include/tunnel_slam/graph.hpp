@@ -59,11 +59,11 @@ class Graph
 
         double getCurrentTimeOdometry(void) const { return timeOdometry; }
 
-        void runOnce();
-        void runSmoothing();
+        void runOnce(int &runsWithoutUpdate);
+        void runRefine();
         void writeToFile();
     private:
-        void _smoothPoses();
+        void _mapToGraph();
         // ROS Members
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master
         ros::Subscriber subOdometry;
@@ -83,7 +83,7 @@ class Graph
         double minCorresponendencesStructure = 10;
         int cloudsInQueue = 0;
 
-        int maxIterSmoothing = 10;
+        int maxIterSmoothing = 50;
         float fxTol = 0.05;
         double stepTol = 1e-5;
         double delayTol = 1;
@@ -91,15 +91,15 @@ class Graph
         bool imuInitialized, imuFactorAdded = false;
         std::mutex mtx;
 
-        double timeOdometry, timeMap, timePrevPreintegratedImu = 0;
+        double timeOdometry, timeMap, timePrevPreintegratedImu, timeKeyPose = 0;
         bool newLaserOdometry, newMap, newGroundPlane, 
-            newImu, updateImu, newGnss = false;
+            newImu, updateImu, newGnss, newGnssInGraph = false;
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
         gtsam::Values initialEstimate, isamCurrentEstimate;
         gtsam::ISAM2 *isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, gnssNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, gnssNoise, loopClosureNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
@@ -125,7 +125,7 @@ class Graph
         std::deque<std::pair<double, gtsam::Pose3>> odometryMeasurements, timeKeyPosePairs; // [time, measurement]
         std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements; // [time, measurement]
         std::deque<std::pair<double, gtsam::Pose3>> gnssMeasurements; // [time, measurement]
-        std::deque<std::pair<gtsam::Key, gtsam::Pose3>> keyGnssMeasurementPair;
+        std::deque<std::pair<gtsam::Key, gtsam::Pose3>> newKeyGnssMeasurementPairs, keyGnssMeasurementPairs;
 
 
         
@@ -144,5 +144,6 @@ class Graph
         void _postProcessIMU();
         void _publishReworkedMap();
         void _preProcessGNSS();
+        void _investigateLoopClosure();
 };
 #endif

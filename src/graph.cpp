@@ -107,11 +107,11 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     gtsam::Vector6 Sigmas(6);
     Sigmas << 0.05, 0.05, 1e-3, 0.05, 0.05, 0.1; // rad, rad, rad, m, m, m
     gtsam::Vector6 imuSigmas(6);
-    imuSigmas << 5e-4, 5e-4, 5e-4, 0.005, 0.005, 0.01; // rad, rad, rad, m, m, m
+    imuSigmas << 5e-4, 5e-4, 5e-4, 0.001, 0.001, 0.02; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
     structureSigmas << 0.3, 0.3, 0.3; //m, m, m
     gtsam::Vector3 gnssSigmas(3);
-    gnssSigmas << 0.5, 0.5, 0.8;
+    gnssSigmas << 0.2, 0.2, 0.3;
 
     downSizeFilterMap.setLeafSize(voxelRes, voxelRes, voxelRes);
 
@@ -224,28 +224,27 @@ void Graph::_performIsam()
     else{
         _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(index-1), X(index), lastPoseInWorld.between(currentPoseInWorld), odometryNoise));
         initialEstimate.insert(X(index), currentPoseInWorld);
-        /*auto prev_disp = isamCurrentEstimate.at<gtsam::Pose3>(X(index-2)).between(lastPoseInWorld);
-        gtsam::Point3 cv_disp = prev_disp.LogmapDerivative();
-        gtsam::
-        dt_prev = dt;
-        _graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(index-1), X(index), ))*/
+
         if (updateImu){
-            /*auto preintImu = 
-            dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);*/
             auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
-            //gtsam::ImuFactor imuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), preintImu);
+
             gtsam::CombinedImuFactor combinedImuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
-            //_graph.add(imuFactor);
-            //gtsam::imuBias::ConstantBias zero_bias(gtsam::Vector3(0, 0, 0), gtsam::Vector3(0, 0, 0));
-            //_graph.add(gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(index-1), B(index), zero_bias, imuBiasNoise));
+
             _graph.add(combinedImuFactor);
             initialEstimate.insert(V(index), predImuState.v());
             initialEstimate.insert(B(index), prevImuBias);
         }
         
-        for(auto it = keyGnssMeasurementPair.rbegin(); it != keyGnssMeasurementPair.rend(); ++it){
-            if (isamCurrentEstimate.exists(it->first)) break;
-            gtsam::GPSFactor(it->first, it->second.translation(), gnssNoise);
+        for(auto it = newKeyGnssMeasurementPairs.begin(); it != newKeyGnssMeasurementPairs.end();){
+            if (isamCurrentEstimate.exists(it->first)){
+                std::cout << "GPS: " << it->second << std::endl;
+                gtsam::GPSFactor gpsFactor(it->first, it->second.translation(), gnssNoise);
+                keyGnssMeasurementPairs.push_back(*it);
+                newGnssInGraph = true;
+                _graph.add(gpsFactor);
+                it = newKeyGnssMeasurementPairs.erase(it);
+            }
+            else ++it;
         }
     }
 
@@ -261,12 +260,9 @@ void Graph::_performIsam()
     isamCurrentEstimate = isam->calculateEstimate();
 
     if (updateImu){
-        //auto preintImu = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*preintegrated);
         prevImuState = gtsam::NavState(isamCurrentEstimate.at<gtsam::Pose3>(X(index)), isamCurrentEstimate.at<gtsam::Vector3>(V(index)));
         prevImuBias = isamCurrentEstimate.at<gtsam::imuBias::ConstantBias>(B(index));
-        //gtsam::Matrix9 cov = preintImu.preintMeasCov();
         preintegrated->resetIntegrationAndSetBias(prevImuBias);
-        //preintegrated = std::make_shared<gtsam::PreintegratedImuMeasurements>(*preintegrated, cov);
         updateImu=false;
         imuFactorAdded = true;
     }
@@ -276,10 +272,6 @@ void Graph::_performIsam()
     cloudKeyPositions->push_back(pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z()));
     
     _fromPose3ToPointXYZRPY(currentPoseInWorld, currentPose);
-    /*currentPose.x = currentPoseInWorld.translation().x(); currentPose.y = currentPoseInWorld.translation().y(); currentPose.z = currentPoseInWorld.translation().z();
-    currentPose.roll = currentPoseInWorld.rotation().roll();
-    currentPose.pitch = currentPoseInWorld.rotation().pitch();
-    currentPose.yaw = currentPoseInWorld.rotation().yaw();*/
 
     cloudKeyPoses->push_back(currentPose);
     timeKeyPosePairs.push_back(std::pair<double, gtsam::Pose3>(timeOdometry, currentPoseInWorld));
@@ -287,7 +279,6 @@ void Graph::_performIsam()
     lastPoseInWorld = currentPoseInWorld;
 
     pcl::PointCloud<pointT>::Ptr thisKeyFrame(new pcl::PointCloud<pointT>());
-    //pcl::copyPointCloud(*currentFeatureCloud, *thisKeyFrame);
     downSizeFilterMap.setInputCloud(currentFeatureCloud);
     downSizeFilterMap.filter(*thisKeyFrame);
     cloudKeyFrames.push_back(thisKeyFrame);
@@ -318,7 +309,7 @@ void Graph::_performIsam()
     //#TODO: FINISH/DECIDE WHETHER OR NOT TO USE THIS
 }*/
 
-void Graph::_smoothPoses(){
+void Graph::_mapToGraph(){
     mtx.lock();
     if (cloudsInQueue==0){
         mtx.unlock();
@@ -414,6 +405,24 @@ void Graph::_smoothPoses(){
     //_publishReworkedMap(keys);
 }
 
+void Graph::_investigateLoopClosure()
+{
+    mtx.lock();
+    if (!newGnssInGraph) mtx.unlock(); return;
+    gtsam::NonlinearFactorGraph graph;
+    newGnssInGraph = false;
+    auto newGnssMeasurement = keyGnssMeasurementPairs.back();
+    for (int i = 0; i<keyGnssMeasurementPairs.size()-1; i++){
+        auto keyGnssMeasurementPair = keyGnssMeasurementPairs[i];
+        auto lcFactor = gtsam::BetweenFactor<gtsam::Pose3>(newGnssMeasurement.first, keyGnssMeasurementPair.first, newGnssMeasurement.second.between(keyGnssMeasurementPair.second), loopClosureNoise);
+        graph.add(lcFactor);
+    }
+    isam->update(graph);
+    isam->update();
+    isamCurrentEstimate = isam->calculateEstimate();
+    mtx.unlock();
+}
+
 void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
 {
     double time = odomMsg->header.stamp.toSec();
@@ -467,7 +476,6 @@ void Graph::imuHandler(const sensor_msgs::ImuConstPtr &imuMsg){
 void Graph::gnssHandler(const geometry_msgs::PoseStampedConstPtr &gnssMsg)
 {
     if (!gnssEnabledFlag) return;
-    std::cout << "GNSS RECEIVED" << std::endl;
     double time = gnssMsg->header.stamp.toSec();
     gtsam::Point3 pos(gnssMsg->pose.position.x, gnssMsg->pose.position.y, gnssMsg->pose.position.z);
     gtsam::Rot3 rot = gtsam::Rot3::Quaternion(gnssMsg->pose.orientation.w, gnssMsg->pose.orientation.x, gnssMsg->pose.orientation.y, gnssMsg->pose.orientation.z);
@@ -702,7 +710,7 @@ void Graph::_cloud2Map(){
     }
 }
 
-void Graph::runOnce()
+void Graph::runOnce(int &runsWithoutUpdate)
 {
     if (gnssEnabledFlag && newGnss){
         mtx.lock();
@@ -740,21 +748,22 @@ void Graph::runOnce()
         _publishTrajectory();
         
         mtx.unlock();        
+        runsWithoutUpdate=0;
     }
+    else runsWithoutUpdate++;
 }
 
 void Graph::_preProcessGNSS(){
-    int measurements = gnssMeasurements.size();
-
-    for (int i = 0; i < measurements; i++){
-        std::pair<double, gtsam::Pose3> measurementWithStamp = gnssMeasurements[i];
+    for (auto it = gnssMeasurements.begin(); it != gnssMeasurements.end(); ++it){
+        std::pair<double, gtsam::Pose3> measurementWithStamp = *it;
         if (measurementWithStamp.first > timeOdometry) break;
         for (int j = timeKeyPosePairs.size()-1; j >= 0; --j){
             auto timeKeyPose = timeKeyPosePairs[j];
-            if (measurementWithStamp.first < (timeKeyPose.first - delayTol)){
-                keyGnssMeasurementPair.push_back(std::pair<gtsam::Key, gtsam::Pose3>(X(j), measurementWithStamp.second));
-                gnssMeasurements.pop_front();
-                i--;
+            std::cout << "Measurement stamp: " << measurementWithStamp.first << " KeyPose stamp: " << timeKeyPose.first << "Time odometry: " << timeOdometry << std::endl;
+            if (measurementWithStamp.first > (timeKeyPose.first - delayTol)){
+                std::cout << "Stamp: " << it->first << " Pos: " << it->second.translation() << " Keypose #: " << j << std::endl;
+                newKeyGnssMeasurementPairs.push_back(std::pair<gtsam::Key, gtsam::Pose3>(X(j), measurementWithStamp.second));
+                gnssMeasurements.erase(it);
                 break;
             }
         }
@@ -764,15 +773,16 @@ void Graph::_preProcessGNSS(){
 void Graph::_preProcessIMU(){
     int measurements = imuMeasurements.size();
     //int i = 0;
-    for (int i = 0; i < measurements; i++){
-        std::pair<double, gtsam::Vector6> measurementWithStamp = imuMeasurements[i];
+    for (auto it = imuMeasurements.begin(); it != imuMeasurements.end(); it++){
+        std::pair<double, gtsam::Vector6> measurementWithStamp = *it;
         //std::cout << "measurementWithStamp: " << measurementWithStamp.first << " timePrev:" << timePrevPreintegratedImu << " TimeOdometry: "<< timeOdometry << std::endl;
         if (measurementWithStamp.first <= timeOdometry){
             double dt = measurementWithStamp.first - timePrevPreintegratedImu;
             preintegrated->integrateMeasurement(measurementWithStamp.second.head<3>(), measurementWithStamp.second.tail<3>(), dt);
             timePrevPreintegratedImu = measurementWithStamp.first;
-            imuMeasurements.pop_front();
-            i--;
+            //imuMeasurements.pop_front();
+            //i--;
+            it = imuMeasurements.erase(it);
             updateImu=true;
         }
         else break;
@@ -801,12 +811,13 @@ void Graph::_postProcessIMU(){
     }
 }
 
-void Graph::runSmoothing()
+void Graph::runRefine()
 {
     if (smoothingEnabledFlag == false) return;
     ros::Rate rate(0.5);
     while (ros::ok()){
-        _smoothPoses();
+        _mapToGraph();
+        //_investigateLoopClosures()
         _publishReworkedMap();
         rate.sleep();
     }
@@ -948,7 +959,7 @@ void Graph::writeToFile()
 {   
     std::ofstream csvFile("/home/sjurinho/master_ws/src/tunnel_slam/data/LatestRun.csv");
     std::cout << "Failed to open file: " << csvFile.fail() << std::endl;
-    csvFile << "key, landmark(x;y;z), pose(x;y;z;r;p;y;cov[36]), velocity(u;v;w), bias(bu;bv;bw;br;bp;by)\n";
+    csvFile << "key,landmark(x;y;z),pose(x;y;z;r;p;y;cov[36]),velocity(u;v;w),bias(bu;bv;bw;br;bp;by)\n";
     for (auto it : isamCurrentEstimate){
         std::string key = gtsam::DefaultKeyFormatter(it.key);
         std::string row;
@@ -956,7 +967,7 @@ void Graph::writeToFile()
             case 'l':
             {
                 auto l = it.value.cast<gtsam::Point3>();
-                row = key + "," + std::to_string(l.x()) + ";" + std::to_string(l.y()) + ";" + std::to_string(l.z()) + ", , , ";
+                row = key + "," + std::to_string(l.x()) + ";" + std::to_string(l.y()) + ";" + std::to_string(l.z()) + ",,,";
                 break;
             }
             case 'x':
@@ -965,33 +976,40 @@ void Graph::writeToFile()
                 auto cov = isam->marginalCovariance(it.key);
                 std::map<int, int> map = {{0, 3}, {1,4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}};
                 
-                row = key + ", ," + std::to_string(x.translation().x()) + ";" + std::to_string(x.translation().y()) + ";" + std::to_string(x.translation().z()) + ";" + std::to_string(x.rotation().roll()) + ";" + std::to_string(x.rotation().pitch()) + ";" + std::to_string(x.rotation().yaw());
+                row = key + ",," + std::to_string(x.translation().x()) + ";" + std::to_string(x.translation().y()) + ";" + std::to_string(x.translation().z()) + ";" + std::to_string(x.rotation().roll()) + ";" + std::to_string(x.rotation().pitch()) + ";" + std::to_string(x.rotation().yaw()) + ";";
                 for (int i = 0; i<36; i++){
                     int r = i / 6;
                     int c = i % 6;
-                    std::string s = std::to_string((double) cov(map[r], map[c])) + ";";
+                    std::string s;
+                    if (i<35) {
+                        s = std::to_string((double) cov(map[r], map[c])) + ";";
+                    }
+                    else{
+                        s = std::to_string((double) cov(map[r], map[c]));
+                    }
                     row += s;
                 }
-                row += ", , ";
+                row += ",,";
                 break;
             }
             case 'v':
             {
                 auto vel = it.value.cast<gtsam::Velocity3>();
-                row = key + ", , ," + std::to_string(vel(0)) + ";" + std::to_string(vel(1)) + ";" + std::to_string(vel(2)) + ", ";
+                row = key + ",,," + std::to_string(vel(0)) + ";" + std::to_string(vel(1)) + ";" + std::to_string(vel(2)) + ",";
                 break;
             }
             case 'b':
             {
                 auto bias = it.value.cast<gtsam::imuBias::ConstantBias>();
-                row = key + ", , , ," + std::to_string(bias.accelerometer()(0)) + ";" + std::to_string(bias.accelerometer()(1)) + ";" + std::to_string(bias.accelerometer()(2)) + ";" + std::to_string(bias.gyroscope()(0)) + ";" + std::to_string(bias.gyroscope()(1)) + ";" + std::to_string(bias.gyroscope()(2));
+                row = key + ",,,," + std::to_string(bias.accelerometer()(0)) + ";" + std::to_string(bias.accelerometer()(1)) + ";" + std::to_string(bias.accelerometer()(2)) + ";" + std::to_string(bias.gyroscope()(0)) + ";" + std::to_string(bias.gyroscope()(1)) + ";" + std::to_string(bias.gyroscope()(2));
                 break;
             }
             default:
-                row = "ERROR, , , , ";
+                row = "ERROR,,,,";
                 break;
         }
         csvFile << row + "\n";
     }
+    isam->saveGraph("IsamGraph");
     csvFile.close();
 }
