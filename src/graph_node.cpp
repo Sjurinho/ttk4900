@@ -12,18 +12,22 @@ int main(int argc, char** argv)
     ros::NodeHandle pnh("~"); 
     
     Graph node(nh,pnh); // Creating the object
+    std::thread refineThread(&Graph::runRefine, &node);
 
     ros::Rate rate(10); // Defing the looping rate
-    //std::thread smoothThread(&Graph::runSmoothing, &node);
 
     /* Looking for any interupt else it will continue looping */
+    int runsWithoutUpdate=0;
     while (ros::ok())
     {   
         //ros::spin();
         ros::spinOnce();
-        node.runOnce();
+        node.runOnce(runsWithoutUpdate);
         rate.sleep();
     }
-    //smoothThread.join();
+    refineThread.join();
+    std::cout << "SHUTTING DOWN - SAVING GRAPH" << std::endl;
+    node.writeToFile();
     return 0;
+
 }

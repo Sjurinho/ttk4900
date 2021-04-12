@@ -70,5 +70,9 @@
         "typeinfo": "cpp",
         "*.ipp": "cpp"
     },
-    "ros.distro": "melodic"
+    "ros.distro": "melodic",
+    "cmake.configureOnOpen": false,
+    "python.analysis.extraPaths": [
+        "/opt/ros/melodic/lib/python2.7/dist-packages"
+    ]
 }

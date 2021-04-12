@@ -24,6 +24,7 @@ class FeatureAssociation
 
         float leafSize = 0.2;
         float normalRadius = leafSize*2.5;
+        int minNrOfFeatures=30;
 
         // ROS Members
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master

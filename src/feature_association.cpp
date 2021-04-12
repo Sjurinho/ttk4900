@@ -187,7 +187,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     pcl::registration::CorrespondenceRejectorSampleConsensus<pcl::PointNormal> rej;
     rej.setInputSource(featureCloud.makeShared());
     rej.setInputTarget(_prevFeatureCloud.makeShared());
-    rej.setInlierThreshold(1.5);
+    rej.setInlierThreshold(0.5);
     rej.setMaximumIterations(50);
     rej.setRefineModel(true);
     rej.setInputCorrespondences(partialOverlapCorrespondences);
@@ -328,7 +328,9 @@ void FeatureAssociation::runOnce()
         _extractFeatures(excludedGroundPlane, featureCloud, featureDescriptors);
         //std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
         //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
-
+        if (featureDescriptors.points.size() < minNrOfFeatures){
+            return;
+        }
         if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty() ) {
             std::cout << "INITIALIZING PREVIOUS" << std::endl;
             _prevFeatureCloud       = featureCloud;

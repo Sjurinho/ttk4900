@@ -6,6 +6,7 @@
 
 #include <mutex>
 #include <vector>
+#include <deque>
 
 #include <ros/ros.h> // including the ros header file
 
@@ -15,7 +16,9 @@
 #include <pcl/filters/voxel_grid.h>
 
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -25,9 +28,13 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/Values.h>
+#include <gtsam/navigation/ImuFactor.h>
+#include <gtsam/navigation/CombinedImuFactor.h>
 
 
 // POINT TYPE FOR REGISTERING ENTIRE POSE
+typedef pcl::PointXYZ pointT;
+
 struct PointXYZRPY{
     PCL_ADD_POINT4D;
     float roll;
@@ -47,67 +54,99 @@ class Graph
         void odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg);
         void mapHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
         void groundPlaneHandler(const sensor_msgs::PointCloud2ConstPtr& pointCloud2Msg);
-        void runOnce();
-        void runSmoothing();
+        void imuHandler(const sensor_msgs::ImuConstPtr &imuMsg);
+        void gnssHandler(const geometry_msgs::PoseStampedConstPtr &gnssMsg);
+
+        double getCurrentTimeOdometry(void) const { return timeOdometry; }
+
+        void runOnce(int &runsWithoutUpdate);
+        void runRefine();
+        void writeToFile();
     private:
-        void _smoothPoses();
+        void _mapToGraph();
         // ROS Members
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master
         ros::Subscriber subOdometry;
         ros::Subscriber subMap, subGroundPlane;
+        ros::Subscriber subImu;
+        ros::Subscriber subGnss;
         ros::Publisher pubTransformedMap;
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
-
+        ros::Publisher pubReworkedMap;
+        ros::Time timer;
 
         // Optimization parameters
-        bool smoothingEnabledFlag=true;
+        bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true;
         double voxelRes = 0.3;
-        int smoothingFrames = 10;
+        double keyFrameSaveDistance = 4;
+        double minCorresponendencesStructure = 20;
+        int cloudsInQueue = 0;
 
-        int maxIterSmoothing = 20;
+        int maxIterSmoothing = 30;
         float fxTol = 0.05;
-        double stepTol = 1e-15;
+        double stepTol = 1e-5;
+        double delayTol = 1;
 
+        double* imuComparisonTimerPtr;
 
+        bool imuInitialized=false, newKeyPose = false;
+        std::mutex mtx;
+
+        double timeOdometry, timeMap, timePrevPreintegratedImu, timeKeyPose = 0;
+        bool newLaserOdometry=false, newMap=false, newGroundPlane=false, newImu=false, updateImu=false, newGnss=false, newGnssInGraph = false;
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
         gtsam::Values initialEstimate, isamCurrentEstimate;
-        gtsam::ISAM2* isam;
+        gtsam::ISAM2 *isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, gnssNoise, loopClosureNoise;
 
-        pcl::VoxelGrid<pcl::PointNormal> downSizeFilterSurroundingKeyPoses;
-        std::mutex mtx;
+        gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
+
+
+        pcl::VoxelGrid<pointT> downSizeFilterMap;
         pcl::PointXYZ previousPosPoint, currentPosPoint;
-        pcl::PointCloud<pcl::PointNormal>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
+        pcl::PointCloud<pointT>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
 
-        std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> cloudKeyFrames;
-        pcl::PointCloud<pcl::PointNormal>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
-        pcl::octree::OctreePointCloudSearch<pcl::PointNormal>::Ptr octreeMap;
+        std::vector<pcl::PointCloud<pointT>::Ptr> cloudKeyFrames;
+        pcl::PointCloud<pointT>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
+        pcl::PointCloud<pcl::PointXYZ>::Ptr reworkedMap;
+        pcl::octree::OctreePointCloudSearch<pointT>::Ptr octreeMap;
+        std::vector<std::pair<gtsam::Key, int>> mapKeys;
 
-
-        double disp[6] = { 0 }; // [roll, pitch, yaw, x, y, z]
         gtsam::Pose3 currentPoseInWorld, lastPoseInWorld = gtsam::Pose3::identity();
         gtsam::Pose3 displacement;
 
-        double timeOdometry, timeMap = 0;
-        bool newLaserOdometry, newMap, newGroundPlane = false;
+        std::shared_ptr<gtsam::PreintegrationType> preintegrated;
+        gtsam::NavState prevImuState, predImuState;
+        gtsam::imuBias::ConstantBias prevImuBias;
+        std::deque<std::pair<double, gtsam::Pose3>> odometryMeasurements, timeKeyPosePairs; // [time, measurement]
+        std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements; // [time, measurement]
+        std::pair<double, gtsam::Point3> gnssMeasurement; // [time, measurement]
+        std::deque<std::pair<gtsam::Key, gtsam::Point3>> newKeyGnssMeasurementPairs, keyGnssMeasurementPairs;
 
+
+        
         void _incrementPosition();
         void _lateralEstimation();
         void _transformMapToWorld();
         void _transformToGlobalMap(); // Adds to the octree structure and fullmap simultaneously
-        void _createKeyFramesMap();
         void _performIsam();
         void _publishTrajectory();
         void _publishTransformed();
         void _fromPointXYZRPYToPose3(const PointXYZRPY &poseIn, gtsam::Pose3 &poseOut);
         void _fromPose3ToPointXYZRPY(const gtsam::Pose3 &poseIn, PointXYZRPY &poseOut);
-        void _evaluate_transformation(int minNrOfPoints, int latestFrame, const std::vector<PointXYZRPY>& posesBefore, const std::vector<PointXYZRPY>& posesAfter, const std::vector<gtsam::Point3> &pointsWorld, const std::vector<gtsam::Point3> &pointsLocal, double &resultBefore, double &resultAfter);
-        void _applyUpdate(std::vector<PointXYZRPY> keyPoses, int latestFrame);
         void _cloud2Map();
+        void _initializePreintegration();
+        void _preProcessIMU();
+        void _postProcessIMU();
+        void _publishReworkedMap();
+        void _preProcessGNSS();
+        void _investigateLoopClosure();
+        void _performIsamTimedOut();
+        void _postProcessImuTimedOut();
 };
 #endif
