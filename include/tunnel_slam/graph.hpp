@@ -79,21 +79,22 @@ class Graph
         // Optimization parameters
         bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true;
         double voxelRes = 0.3;
-        double keyFrameSaveDistance = 5;
-        double minCorresponendencesStructure = 10;
+        double keyFrameSaveDistance = 4;
+        double minCorresponendencesStructure = 20;
         int cloudsInQueue = 0;
 
-        int maxIterSmoothing = 50;
+        int maxIterSmoothing = 30;
         float fxTol = 0.05;
         double stepTol = 1e-5;
         double delayTol = 1;
 
-        bool imuInitialized, imuFactorAdded = false;
+        double* imuComparisonTimerPtr;
+
+        bool imuInitialized=false, newKeyPose = false;
         std::mutex mtx;
 
         double timeOdometry, timeMap, timePrevPreintegratedImu, timeKeyPose = 0;
-        bool newLaserOdometry, newMap, newGroundPlane, 
-            newImu, updateImu, newGnss, newGnssInGraph = false;
+        bool newLaserOdometry=false, newMap=false, newGroundPlane=false, newImu=false, updateImu=false, newGnss=false, newGnssInGraph = false;
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
         gtsam::Values initialEstimate, isamCurrentEstimate;
@@ -124,8 +125,8 @@ class Graph
         gtsam::imuBias::ConstantBias prevImuBias;
         std::deque<std::pair<double, gtsam::Pose3>> odometryMeasurements, timeKeyPosePairs; // [time, measurement]
         std::deque<std::pair<double, gtsam::Vector6>> imuMeasurements; // [time, measurement]
-        std::deque<std::pair<double, gtsam::Pose3>> gnssMeasurements; // [time, measurement]
-        std::deque<std::pair<gtsam::Key, gtsam::Pose3>> newKeyGnssMeasurementPairs, keyGnssMeasurementPairs;
+        std::pair<double, gtsam::Point3> gnssMeasurement; // [time, measurement]
+        std::deque<std::pair<gtsam::Key, gtsam::Point3>> newKeyGnssMeasurementPairs, keyGnssMeasurementPairs;
 
 
         
@@ -145,5 +146,7 @@ class Graph
         void _publishReworkedMap();
         void _preProcessGNSS();
         void _investigateLoopClosure();
+        void _performIsamTimedOut();
+        void _postProcessImuTimedOut();
 };
 #endif

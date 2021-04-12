@@ -17,6 +17,17 @@ class PoseData:
         self.times = times
         self.covariances = covs
 
+class GNSSData:
+    def __init__(self, positions, time):
+        self.pos = positions
+        self.time = time
+
+def mat2GNSSData(filename):
+    m = sio.loadmat(filename, simplify_cells=True)
+    gnss_pos = m['simple_tunnel_ds']['gnss']['measurements']
+    gnss_time = m['simple_tunnel_ds']['gnss']['times']
+    return GNSSData(gnss_pos, gnss_time)
+
 def plot_cov_ellipse2d(
     ax: plt.Axes,
     mean: np.ndarray = np.zeros(2),
@@ -83,11 +94,11 @@ def bag2numpy(bagname):
         for msg in bag.read_messages(['/pose', '/ground_truth']):
             if msg.topic == '/ground_truth':
                 position = msg.message.pose.position
-                positionArr = [position.x, -position.y, -position.z] # Rotate to correct coordinate system
+                positionArr = [position.x, position.y, position.z] 
                 quat = msg.message.pose.orientation
                 angles = euler_from_quaternion(quat.x, quat.y, quat.z, quat.w)
                 gt_positions.append(positionArr)
-                gt_orientations.append([angles[0], angles[1], angles[2]]) # Rotate to correct coordinate system
+                gt_orientations.append([angles[0], angles[1], angles[2]]) 
                 gt_times.append(rospy.Time.to_sec(msg.message.header.stamp))
             elif msg.topic == '/pose':
                 position = msg.message.pose.pose.position
@@ -115,11 +126,17 @@ def csv2numpy(filename: str, other_estimate: PoseData):
     unserializedPoses = data[data["key"].str.contains(pat="x")].to_numpy()
     unserializedLandmarks = data[data["key"].str.contains(pat="l")].to_numpy()
     unserializedVelocitites = data[data["key"].str.contains(pat="v")].to_numpy()
+    print(unserializedVelocitites.shape)
     unserializedBiases = data[data["key"].str.contains(pat="b")].to_numpy()
-    serVelocities = serialize(unserializedVelocitites, 3)
     serPoses = serialize(unserializedPoses, 2)
-    serLandmarks = serialize(unserializedLandmarks, 1)
-    serBiases = serialize(unserializedBiases, 4)
+    if unserializedVelocitites.shape[0] > 0:
+        serVelocities = serialize(unserializedVelocitites, 3)
+        serLandmarks = serialize(unserializedLandmarks, 1)
+        serBiases = serialize(unserializedBiases, 4)
+    else:
+        serVelocities = []
+        serLandmarks = []
+        serBiases = []
 
     estimate_positions=serPoses[:, :3]
     estimate_orientations=serPoses[:, 3:6]
@@ -129,25 +146,26 @@ def csv2numpy(filename: str, other_estimate: PoseData):
     return estimates, serVelocities, serLandmarks, serBiases
 
 def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim=[-10, 10], ylim=[0, 240]):
-    fig, ax = plt.subplots(clear=True, figsize=(10,10))
-    ax.set_title(title + " Estimate vs Ground Truth")
-    ax.plot(estimates.positions[:, 1], estimates.positions[:, 0], label=r'$\hat{x}$')
-    ax.plot(gts.positions[:, 1], gts.positions[:, 0], label=r'$x$')
-    ax.legend()
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
+    fig, ax = plt.subplots(1, 2, clear=True, figsize=(10,10), sharey=True)
+    fig.suptitle(title)
+    ax[0].set_title("Estimate vs Ground Truth")
+    ax[0].plot(estimates.positions[:, 1], estimates.positions[:, 0], label=r'$\hat{x}$')
+    ax[0].plot(gts.positions[:, 1], gts.positions[:, 0], label=r'$x$')
+    ax[0].legend()
+    ax[0].set_xlim(*xlim)
+    ax[0].set_ylim(*ylim)
 
-    fig2, ax2 = plt.subplots(clear=True, figsize=(10,10))
-    ax2.set_title(title + " Estimate with Covariance")
+    #fig2, ax2 = plt.subplots(clear=True, figsize=(10,10))
+    ax[1].set_title("Estimate with Covariance")
     for i, (position, orientation, cov) in enumerate(zip(estimates.positions, estimates.orientations, estimates.covariances)):
         if i%skipPlt == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
-            plot_cov_ellipse2d(ax2, np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
-    ax2.plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
-    ax2.legend()
-    ax2.set_xlim(*xlim)
-    ax2.set_ylim(*ylim)
-    return fig, fig2
+            plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
+    ax[1].plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
+    ax[1].legend()
+    ax[1].set_xlim(*xlim)
+    ax[1].set_ylim(*ylim)
+    return fig#, fig2
 
 def plotExtraStateEstimates(time, velocities, biases):
     fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10,10))
@@ -190,27 +208,53 @@ def plotMapWithTrajectory(positions, landmarks, view_init=[5, 170], xlim=[-1, 25
         ax.plot([xb], [yb], [zb], 'w')"""
     return fig
 
+def plotErrorsOverTime(estimates, gts, matches):
+    fig, ax = plt.subplots(1, 1, clear=True, figsize=(10,10), sharey=True)
+    print(gts.times[matches].shape, np.linalg.norm(estimates.positions - gts.positions[matches]))
+    ax.plot(gts.times[matches], np.linalg.norm(estimates.positions - gts.positions[matches], axis=1))
+    plt.show()
+
+
 def main():
     import os
     from datetime import datetime
 
-    now = datetime.now()
+    filepath = "../data/recorded_runs/python_plots/Saved/Over60SecRun/Imu+Gnss/"
+    estimates, gts = bag2numpy(f'{filepath}simpleTunnel_IMUAndGNSSMapOptimization_1.bag')
+    estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
+    beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=8, xlim=[-50, 50], ylim=[-1, 300], title="Before Smoothing")
+    afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-1, 300], title="After Smoothing")
+    est_to_gt = np.zeros(estimates.times.shape, dtype=np.int)
+    print(estimates.positions.shape, estimatesAfterSmoothing.positions.shape)
+    for i, est_t in enumerate(estimates.times):
+        est_to_gt[i] = np.argmax(gts.times > est_t)
+    est_to_gt_idxs = np.unique(est_to_gt)
+    plotErrorsOverTime(estimates, gts, est_to_gt)
+
+
+    """now = datetime.now()
     dt_string = now.strftime("%d-%m-%Y_%H:%M:%S")
-    figfolder = f"../data/recorded_runs/python_plots/ImuAndGPS/{dt_string}"
+    figfolder = f"../data/recorded_runs/python_plots/RawRuns/{dt_string}"
     if not os.path.isdir(figfolder):
         os.makedirs(figfolder)
-    estimates, gts = bag2numpy('../data/recorded_runs/simpleTunnel_IMUAndGPSwithMapOptimization_1.bag')
-    estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy("../data/LatestRun.csv", estimates)
-    beforeSmoothingEstVsGt, beforeSmoothingXYWithCov = plotTrajectory2D(estimates, gts, skipPlt=8, ylim=[-1, 300], title="Before Smoothing")
-    afterSmoothingEstVsGt, afterSmoothingXYWithCov = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, ylim=[-1, 300], title="After Smoothing")
-    estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
-    estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
-    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.eps", format='eps')
-    beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.eps", format='eps')
-    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.eps", format='eps')
-    afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.eps", format='eps')
-    estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.eps", format='eps')
-    estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.eps", format='eps')
-    plt.show()
+    
+    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.eps", format='eps', bbox_inches="tight")
+    #beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.eps", format='eps', bbox_inches="tight")
+    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.eps", format='eps', bbox_inches="tight")
+    #afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.eps", format='eps', bbox_inches="tight")
+    if len(velocities) > 0:
+        estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
+        estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
+        estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.eps", format='eps', bbox_inches="tight")
+        estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.eps", format='eps', bbox_inches="tight")
+    plt.show()"""
 
 main()
+"""gnss = mat2GNSSData("../data/april_2021/SimpleTunnel_IMUGNSS_LongTime_straightPath_ds.mat")
+estimates, gts = bag2numpy('../data/recorded_runs/python_plots/Saved/Over60SecRun/Imu+Gnss/simpleTunnel_IMUAndGNSSMapOptimization_1.bag')
+im = plt.imread("../simulator_matlab/straightTunnel.png")
+implot = plt.imshow(im, extent=[-5, 270, -15, 15])
+plt.plot(gts.positions[:, 0], gts.positions[:, 1])
+plt.scatter(gnss.pos[:, 0], gnss.pos[:, 1], marker="x", color="r")
+plt.savefig("StraightTunnel.eps", format="eps", bbox_inches="tight")
+plt.show()"""

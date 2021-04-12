@@ -72,11 +72,10 @@ def mat2GNSSData(filename):
     m = sio.loadmat(filename, simplify_cells=True)
     gnss_pos = m['simple_tunnel_ds']['gnss']['measurements']
     gnss_time = m['simple_tunnel_ds']['gnss']['times']
-    print(gnss_pos)
     return GNSSData(gnss_pos, gnss_time)
 
 def mat2bag(bagname, freq=15):
-    filename = '../data/simpleTunnel_IMU/SimpleTunnel_IMUGPS_straightPath_ds.mat'
+    filename = 'SimpleTunnel_IMUGNSS_LongTime_straightPath_ds'
     scans, times, freq = mat2pointcloud(filename)
     imuData = mat2ImuData(filename)
     gtData = mat2GTData(filename)
@@ -190,7 +189,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
 
 def main():
     rospy.init_node('data2bag')
-    mat2bag('../data/simpleTunnel_straightPath_IMUGNSS.bag')
+    mat2bag('SimpleTunnel_IMUGNSS_LongTime_straightPath_ds.bag')
     #csv2bag('real.bag')
 if __name__ == '__main__':
 	main()
