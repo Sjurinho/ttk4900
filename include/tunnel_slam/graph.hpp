@@ -13,6 +13,7 @@
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/octree/octree_search.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/filters/voxel_grid.h>
 
 #include <sensor_msgs/PointCloud2.h>
@@ -61,6 +62,7 @@ class Graph
 
         void runOnce(int &runsWithoutUpdate);
         void runRefine();
+        void runLoopClosure();
         void writeToFile();
     private:
         void _mapToGraph();
@@ -74,14 +76,25 @@ class Graph
         ros::Publisher pubTransformedPose;
         ros::Publisher pubPoseArray;
         ros::Publisher pubReworkedMap;
+        ros::Publisher pubCurrentCloudInWorld;
+        ros::Publisher pubPotentialLoopCloud;
+        ros::Publisher pubLatestKeyFrameCloud;        
         ros::Time timer;
 
         // Optimization parameters
-        bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true;
+        bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=true;
         double voxelRes = 0.3;
-        double keyFrameSaveDistance = 4;
+        double keyFrameSaveDistance = 3;
         double minCorresponendencesStructure = 20;
         int cloudsInQueue = 0;
+
+        int historyKeyFrameSearchRadius = 8;
+        int closestHistoryFrameID = -1;
+        int latestFrameIDLoopClosure = 0;
+        int historyKeyFrameSearchNum = 10;
+        float historyKeyframeFitnessScore = 1; // the smaller the better alignment
+        bool aLoopIsClosed = false;
+        bool potentialLoopFlag = false;
 
         int maxIterSmoothing = 30;
         float fxTol = 0.05;
@@ -107,12 +120,13 @@ class Graph
 
         pcl::VoxelGrid<pointT> downSizeFilterMap;
         pcl::PointXYZ previousPosPoint, currentPosPoint;
-        pcl::PointCloud<pointT>::Ptr currentFeatureCloud, currentGroundPlaneCloud;
+        pcl::PointCloud<pointT>::Ptr currentFeatureCloud, currentGroundPlaneCloud, latestKeyFrameCloud, nearHistoryKeyFrameCloud;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloudKeyPositions; // Contains key positions
         pcl::PointCloud<PointXYZRPY>::Ptr cloudKeyPoses; // Contains key poses
+        pcl::KdTreeFLANN<pointT>::Ptr kdtreeHistoryKeyPositions;
 
         std::vector<pcl::PointCloud<pointT>::Ptr> cloudKeyFrames;
-        pcl::PointCloud<pointT>::Ptr localKeyFramesMap, cloudMapFull; //For publishing only
+        pcl::PointCloud<pointT>::Ptr localKeyFramesMap, cloudMapFull, cloudMapRefined; //For publishing only
         pcl::PointCloud<pcl::PointXYZ>::Ptr reworkedMap;
         pcl::octree::OctreePointCloudSearch<pointT>::Ptr octreeMap;
         std::vector<std::pair<gtsam::Key, int>> mapKeys;
@@ -131,7 +145,6 @@ class Graph
 
         
         void _incrementPosition();
-        void _lateralEstimation();
         void _transformMapToWorld();
         void _transformToGlobalMap(); // Adds to the octree structure and fullmap simultaneously
         void _performIsam();
@@ -145,7 +158,8 @@ class Graph
         void _postProcessIMU();
         void _publishReworkedMap();
         void _preProcessGNSS();
-        void _investigateLoopClosure();
+        bool _detectLoopClosure();
+        void _performLoopClosure();
         void _performIsamTimedOut();
         void _postProcessImuTimedOut();
 };

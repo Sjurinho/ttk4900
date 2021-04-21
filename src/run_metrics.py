@@ -160,7 +160,7 @@ def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim
     for i, (position, orientation, cov) in enumerate(zip(estimates.positions, estimates.orientations, estimates.covariances)):
         if i%skipPlt == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
-            plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
+            #plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
     ax[1].plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
     ax[1].legend()
     ax[1].set_xlim(*xlim)
@@ -219,8 +219,8 @@ def main():
     import os
     from datetime import datetime
 
-    filepath = "../data/recorded_runs/python_plots/Saved/Over60SecRun/Imu+Gnss/"
-    estimates, gts = bag2numpy(f'{filepath}simpleTunnel_IMUAndGNSSMapOptimization_1.bag')
+    filepath = "../data/"
+    estimates, gts = bag2numpy(f'simpleTunnel_IMUAndGNSSMapOptimization_LoopClosure_1.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
     beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=8, xlim=[-50, 50], ylim=[-1, 300], title="Before Smoothing")
     afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-1, 300], title="After Smoothing")

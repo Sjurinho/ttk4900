@@ -180,7 +180,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
 
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     trimmer.setInputCorrespondences(allCorrespondences);
-    trimmer.setOverlapRatio(0.4);
+    trimmer.setOverlapRatio(0.5);
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
 
@@ -188,7 +188,7 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     rej.setInputSource(featureCloud.makeShared());
     rej.setInputTarget(_prevFeatureCloud.makeShared());
     rej.setInlierThreshold(0.5);
-    rej.setMaximumIterations(50);
+    rej.setMaximumIterations(100);
     rej.setRefineModel(true);
     rej.setInputCorrespondences(partialOverlapCorrespondences);
     rej.getCorrespondences(*goodCorrespondences);
@@ -224,6 +224,14 @@ void FeatureAssociation::_publishTransformation()
         double delta_x = transformation.translation().x();
         double delta_y = transformation.translation().y();
         double delta_z = transformation.translation().z();
+        
+        //Nans
+        if (isnan(delta_x) || isnan(delta_y) || isnan(delta_z))
+            return;
+        
+        // Unstable
+        if (abs(delta_x) > 5 || abs(delta_y) > 5 || abs(delta_z) > 5 || abs(delta_x) + abs(delta_y) > 7)
+            return;
 
         geometry_msgs::TransformStamped tfMsg   = tf2::eigenToTransform(transformation);
         tfMsg.header.stamp                      = currentTime;
@@ -296,6 +304,11 @@ void FeatureAssociation::_calculateNormals(const pcl::PointCloud<pcl::PointXYZ> 
 
 void FeatureAssociation::runOnce()
 {   
+    if(abs(currentTime.toSec() - prevTime.toSec()) > 1){
+        _prevFeatureCloud = pcl::PointCloud<pcl::PointNormal>();
+        _prevFeatureDescriptor = pcl::PointCloud<pcl::FPFHSignature33>();
+        _prevGroundPlaneCloud = pcl::PointCloud<pcl::PointNormal>();
+    }
     if (newCloud){
 
         newCloud=false;
@@ -305,6 +318,9 @@ void FeatureAssociation::runOnce()
 
         std::vector<int> indices;
         pcl::removeNaNFromPointCloud(currentCloud, removedNansCloud, indices);
+        if (removedNansCloud.empty())
+            return;
+
 
         pcl::VoxelGrid<pcl::PointXYZ> voxelGridFilter;
         voxelGridFilter.setInputCloud(removedNansCloud.makeShared());
@@ -329,15 +345,15 @@ void FeatureAssociation::runOnce()
         //std::cout << "FEATURES CLOUD\n" << featureCloud << std::endl;
         //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
         if (featureDescriptors.points.size() < minNrOfFeatures){
+            // Perhaps empty prev
             return;
         }
-        if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty() ) {
+        if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty()) {
             std::cout << "INITIALIZING PREVIOUS" << std::endl;
             _prevFeatureCloud       = featureCloud;
             _prevFeatureDescriptor  = featureDescriptors;
             _prevGroundPlaneCloud   = groundPlane;
             prevTime                = currentTime;
-
         }
         else {
 
