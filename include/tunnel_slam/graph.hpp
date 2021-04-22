@@ -78,21 +78,22 @@ class Graph
         ros::Publisher pubReworkedMap;
         ros::Publisher pubCurrentCloudInWorld;
         ros::Publisher pubPotentialLoopCloud;
-        ros::Publisher pubLatestKeyFrameCloud;        
+        ros::Publisher pubLatestKeyFrameCloud;
+        ros::Publisher pubICPResultCloud;       
         ros::Time timer;
 
         // Optimization parameters
         bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=true;
-        double voxelRes = 0.3;
+        double voxelRes = 0.2;
         double keyFrameSaveDistance = 3;
         double minCorresponendencesStructure = 20;
         int cloudsInQueue = 0;
 
-        int historyKeyFrameSearchRadius = 8;
+        int historyKeyFrameSearchRadius = 50;
         int closestHistoryFrameID = -1;
         int latestFrameIDLoopClosure = 0;
-        int historyKeyFrameSearchNum = 10;
-        float historyKeyframeFitnessScore = 1; // the smaller the better alignment
+        int historyKeyFrameSearchNum = 4;
+        float historyKeyframeFitnessScore = 2; // the smaller the better alignment
         bool aLoopIsClosed = false;
         bool potentialLoopFlag = false;
 

@@ -23,7 +23,11 @@ class GNSSData:
         self.time = time
 
 def mat2GNSSData(filename):
-    m = sio.loadmat(filename, simplify_cells=True)
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
     gnss_pos = m['simple_tunnel_ds']['gnss']['measurements']
     gnss_time = m['simple_tunnel_ds']['gnss']['times']
     return GNSSData(gnss_pos, gnss_time)
@@ -40,23 +44,26 @@ def plot_cov_ellipse2d(
     **kwargs,  # extra Ellipse keyword arguments
 ) -> matplotlib.patches.Ellipse:
     """Plot a n_sigma covariance ellipse centered in mean into ax."""
-    ell_trans_mat = np.zeros((3, 3))
-    ell_trans_mat[:2, :2] = np.linalg.cholesky(cov)
-    ell_trans_mat[:2, 2] = mean
-    ell_trans_mat[2, 2] = 1
+    try:
+        ell_trans_mat = np.zeros((3, 3))
+        ell_trans_mat[:2, :2] = np.linalg.cholesky(cov)
+        ell_trans_mat[:2, 2] = mean
+        ell_trans_mat[2, 2] = 1
 
-    ell = matplotlib.patches.Ellipse(
-        (0.0, 0.0),
-        2.0 * n_sigma,
-        2.0 * n_sigma,
-        edgecolor=edgecolor,
-        facecolor=facecolor,
-        angle=np.rad2deg(yaw),
-        **kwargs,
-    )
-    trans = matplotlib.transforms.Affine2D(ell_trans_mat)
-    ell.set_transform(trans + ax.transData)
-    return ax.add_patch(ell)
+        ell = matplotlib.patches.Ellipse(
+            (0.0, 0.0),
+            2.0 * n_sigma,
+            2.0 * n_sigma,
+            edgecolor=edgecolor,
+            facecolor=facecolor,
+            angle=np.rad2deg(yaw),
+            **kwargs,
+        )
+        trans = matplotlib.transforms.Affine2D(ell_trans_mat)
+        ell.set_transform(trans + ax.transData)
+        return ax.add_patch(ell)
+    except:
+        print("i")
 
 def euler_from_quaternion(x, y, z, w):
         """
@@ -160,7 +167,7 @@ def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim
     for i, (position, orientation, cov) in enumerate(zip(estimates.positions, estimates.orientations, estimates.covariances)):
         if i%skipPlt == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
-            #plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
+            plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
     ax[1].plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
     ax[1].legend()
     ax[1].set_xlim(*xlim)
@@ -212,42 +219,64 @@ def plotErrorsOverTime(estimates, gts, matches):
     fig, ax = plt.subplots(1, 1, clear=True, figsize=(10,10), sharey=True)
     print(gts.times[matches].shape, np.linalg.norm(estimates.positions - gts.positions[matches]))
     ax.plot(gts.times[matches], np.linalg.norm(estimates.positions - gts.positions[matches], axis=1))
-    plt.show()
+    ax.set_title("Absolute position error")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Error [m]")
+    #ax.set_xlabel("Time [s]")
+    #ax.set_ylabel("error [m]")
+    #plt.show()
+    return fig
 
+def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 20]):
+    gnss = mat2GNSSData(matfile)
+    im = plt.imread(imfile)
+    fig, ax = plt.subplots(figsize=(10,3)) #Looks better with this size
+    ax.imshow(im, extent=imExtent, aspect='auto')
+    ax.plot(gts.positions[:, 0], gts.positions[:, 1])
+    ax.scatter(gnss.pos[:, 0], gnss.pos[:, 1], marker="x", color="r")
+    #plt.savefig("experiment.pdf", format="pdf", bbox_inches="tight")
+    return fig
 
 def main():
     import os
     from datetime import datetime
 
-    filepath = "../data/"
-    estimates, gts = bag2numpy(f'simpleTunnel_IMUAndGNSSMapOptimization_LoopClosure_1.bag')
+    filepath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/"
+    estimates, gts = bag2numpy(f'{filepath}simpleTunnel_IMUAndGNSSMapOptimization_LoopClosure_1.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
-    beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=8, xlim=[-50, 50], ylim=[-1, 300], title="Before Smoothing")
-    afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-1, 300], title="After Smoothing")
+    beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-100, 400], title="Before Smoothing")
+    afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-100, 400], title="After Smoothing")
     est_to_gt = np.zeros(estimates.times.shape, dtype=np.int)
-    print(estimates.positions.shape, estimatesAfterSmoothing.positions.shape)
+    #print(estimates.positions.shape, estimatesAfterSmoothing.positions.shape)
     for i, est_t in enumerate(estimates.times):
         est_to_gt[i] = np.argmax(gts.times > est_t)
     est_to_gt_idxs = np.unique(est_to_gt)
-    plotErrorsOverTime(estimates, gts, est_to_gt)
+    errorFig = plotErrorsOverTime(estimates, gts, est_to_gt)
 
 
-    """now = datetime.now()
+    now = datetime.now()
     dt_string = now.strftime("%d-%m-%Y_%H:%M:%S")
     figfolder = f"../data/recorded_runs/python_plots/RawRuns/{dt_string}"
     if not os.path.isdir(figfolder):
         os.makedirs(figfolder)
     
-    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.eps", format='eps', bbox_inches="tight")
-    #beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.eps", format='eps', bbox_inches="tight")
-    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.eps", format='eps', bbox_inches="tight")
-    #afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.eps", format='eps', bbox_inches="tight")
+    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight")
+    #beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.pdf", format='pdf', bbox_inches="tight")
+    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight")
+    #afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.pdf", format='pdf', bbox_inches="tight")
+    errorFig.savefig(figfolder + "/absolutePositionError.pdf", format='pdf', bbox_inches="tight")
     if len(velocities) > 0:
         estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
         estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
-        estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.eps", format='eps', bbox_inches="tight")
-        estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.eps", format='eps', bbox_inches="tight")
-    plt.show()"""
+        estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.pdf", format='pdf', bbox_inches="tight")
+        estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.pdf", format='pdf', bbox_inches="tight")
+    
+    matfile = "../data/april_2021/SimpleTunnel_Loop_10HzFreqLidar_ds.mat"
+    imfile = "../simulator_matlab/straightTunnel_long.png"
+    imExtent = [-10, 300, 20, -30]
+    experimentFig = plotExperiment(gts, imfile, matfile, imExtent=imExtent)
+    experimentFig.savefig(figfolder + "/experiment.pdf", format='pdf', bbox_inches="tight")
+    plt.show()
 
 main()
 """gnss = mat2GNSSData("../data/april_2021/SimpleTunnel_IMUGNSS_LongTime_straightPath_ds.mat")
