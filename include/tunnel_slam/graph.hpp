@@ -86,7 +86,7 @@ class Graph
         bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=false;
         double voxelRes = 0.2;
         double keyFrameSaveDistance = 3;
-        double minCorresponendencesStructure = 20;
+        double minCorresponendencesStructure = 30;
         int cloudsInQueue = 0;
 
         int historyKeyFrameSearchRadius = 50;

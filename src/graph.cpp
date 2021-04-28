@@ -50,10 +50,10 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.02;//0.0003924;
-  double gyro_noise_sigma = 5e-3;//1e-4;//8e-05;
-  double accel_bias_rw_sigma = 0.08;//0.001;//0.02;
-  double gyro_bias_rw_sigma = 0.003;//0.001;//0.00002;//0.0001454441043;
+  double accel_noise_sigma = 0.05;//0.0003924;
+  double gyro_noise_sigma = 1e-3;//1e-4;//8e-05;
+  double accel_bias_rw_sigma = 0.01;//0.001;//0.02;
+  double gyro_bias_rw_sigma = 0.008;//0.001;//0.00002;//0.0001454441043;
   gtsam::Matrix33 measured_acc_cov = gtsam::I_3x3 * pow(accel_noise_sigma, 2);
   gtsam::Matrix33 measured_omega_cov = gtsam::I_3x3 * pow(gyro_noise_sigma, 2);
   gtsam::Matrix33 integration_error_cov =
@@ -111,14 +111,14 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
 
     gtsam::Vector6 priorSigmas(6);
-    priorSigmas << 0.001, 0.001, 1e-5, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
+    priorSigmas << 1e-3, 1e-3, 1e-3, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
 
     gtsam::Vector6 odometrySigmas(6);
-    odometrySigmas << 0.05, 0.05, 1e-4, 0.5, 0.5, 0.1; // rad, rad, rad, m, m, m
+    odometrySigmas << 1e-3, 1e-3, 1e-3, 0.1, 0.1, 0.01; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
-    structureSigmas << 0.5, 0.5, 0.5; //m, m, m
+    structureSigmas << 0.1, 0.1, 0.2; //m, m, m
     gtsam::Vector3 gnssSigmas(3);
-    gnssSigmas << 2, 2, 0.2;
+    gnssSigmas << 1.5, 1.5, 0.05;
 
     downSizeFilterMap.setLeafSize(voxelRes, voxelRes, voxelRes);
 
@@ -642,7 +642,6 @@ void Graph::_cloud2Map(){
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
     int nPoints = partialOverlapCorrespondences->size();
-    std::cout << "Correspondences map alignment: " << nPoints << std::endl;
     if (nPoints < minCorresponendencesStructure)
         return;
     int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
@@ -655,7 +654,8 @@ void Graph::_cloud2Map(){
     worldPoints.reserve(nPoints);
     std::vector<gtsam::Point3> localPoints; 
     localPoints.reserve(nPoints); //reserve space
-    for (int iter = 0; iter<maxIterSmoothing; iter++){
+    int iter;
+    for (iter = 0; iter<maxIterSmoothing; iter++){
         worldPoints.clear(); localPoints.clear();
         cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_64FC1);
         cv::Mat matAt(ACols, ARows, CV_64FC1, cv::Scalar::all(0.0));
@@ -682,7 +682,7 @@ void Graph::_cloud2Map(){
             worldPoints[j] = q_wj;
             localPoints[j] = p_Lij;
 
-            gtsam::Matrix3 tmp = - (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
+            gtsam::Matrix3 tmp = (R_wLi.matrix() * skewSymmetric(p_Lij.x(), p_Lij.y(), p_Lij.z()));
 
             // Calculate Jacobians
             auto J_hij_TwLi = cv::Mat(pointD, poseD, CV_64F, cv::Scalar::all(0));
@@ -695,18 +695,18 @@ void Graph::_cloud2Map(){
             J_hij_TwLi.at<double>(2, 3) = R_wLi.matrix()(2, 0);
             J_hij_TwLi.at<double>(2, 4) = R_wLi.matrix()(2, 1);
             J_hij_TwLi.at<double>(2, 5) = R_wLi.matrix()(2, 2);
-            J_hij_TwLi.at<double>(0, 0) = 1;
-            J_hij_TwLi.at<double>(1, 1) = 1;
-            J_hij_TwLi.at<double>(2, 2) = 1;
-            /*J_hij_TwLi.at<double>(0, 0) = tmp(0, 0);
-            J_hij_TwLi.at<double>(0, 1) = tmp(0, 1);
-            J_hij_TwLi.at<double>(0, 2) = tmp(0, 2);
-            J_hij_TwLi.at<double>(1, 0) = tmp(1, 0);
-            J_hij_TwLi.at<double>(1, 1) = tmp(1, 1);
-            J_hij_TwLi.at<double>(1, 2) = tmp(1, 2);
-            J_hij_TwLi.at<double>(2, 0) = tmp(2, 0);
-            J_hij_TwLi.at<double>(2, 1) = tmp(2, 1);
-            J_hij_TwLi.at<double>(2, 2) = tmp(2, 2);*/
+            /*J_hij_TwLi.at<double>(0, 3) = 1;
+            J_hij_TwLi.at<double>(1, 4) = 1;
+            J_hij_TwLi.at<double>(2, 5) = 1;*/
+            J_hij_TwLi.at<double>(0, 0) = -tmp(0, 0);
+            J_hij_TwLi.at<double>(0, 1) = -tmp(0, 1);
+            J_hij_TwLi.at<double>(0, 2) = -tmp(0, 2);
+            J_hij_TwLi.at<double>(1, 0) = -tmp(1, 0);
+            J_hij_TwLi.at<double>(1, 1) = -tmp(1, 1);
+            J_hij_TwLi.at<double>(1, 2) = -tmp(1, 2);
+            J_hij_TwLi.at<double>(2, 0) = -tmp(2, 0);
+            J_hij_TwLi.at<double>(2, 1) = -tmp(2, 1);
+            J_hij_TwLi.at<double>(2, 2) = -tmp(2, 2);
 
             /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_64F, cv::Scalar::all(0));
             J_hij_xwj.at<double>(0, 0) = R_wLi.matrix()(0, 0);
@@ -833,6 +833,7 @@ void Graph::_cloud2Map(){
             break;
         }
     }
+    std::cout << "Iterations for cloud alignment: " << iter << std::endl;
 }
 
 void Graph::runOnce(int &runsWithoutUpdate)
@@ -858,7 +859,8 @@ void Graph::runOnce(int &runsWithoutUpdate)
         _incrementPosition();
         // #TODO: PROCESS IMU
 
-        _postProcessIMU(); 
+        _postProcessIMU();
+
         //_lateralEstimation();
 
         _cloud2Map();
