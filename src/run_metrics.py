@@ -233,15 +233,15 @@ def plotErrorsOverTime(estimatesBeforeSmoothing, estimatesAfterSmoothing, gts, m
 
     # Before smoothing
     axs[0].plot(gts.times[matchesBeforeSmoothing], np.linalg.norm(estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing], ord=2, axis=1), label="Before Smoothing")
-    axs[0].axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-    axs[0].axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+    axs[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+    axs[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[0].set_xlim([0, gts.times[-1]])
 
     axs[0].set_title("XY Position Error")
     axs[0].set_ylabel("Error [m]")
     axs[1].plot(gts.times[matchesBeforeSmoothing], func(np.rad2deg(estimatesBeforeSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesBeforeSmoothing, -1])), label="Before Smoothing")
-    axs[1].axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-    axs[1].axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+    axs[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+    axs[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[1].set_xlim([0, gts.times[-1]])
     axs[1].set_ylabel("Error [deg]")
     axs[1].set_title("Heading Error")
@@ -284,8 +284,8 @@ def plotNEES(gts:PoseData, estimatesBeforeSmoothing:PoseData, estimatesAfterSmoo
     ax.plot(estimatesAfterSmoothing.times, NEESAfterSmoothing, label="After Smoothing")
     ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]))
     ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]))
-    ax.axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-    ax.axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+    ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+    ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     ax.set_xlim([0, gts.times[-1]])
     ax.legend()
     return fig
@@ -309,12 +309,15 @@ def main():
     from datetime import datetime
 
     filepath = "../data/"
-    matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
+    matfile = "../data/april_2021/SimpleTunnel_Loop_5HzFreqLidar_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
-    estimates, gts = bag2numpy(f'simpleTunnel_loop_loopClosure.bag')
+    estimates, gts = bag2numpy(f'simpleTunnel_loopClosure.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
-    run2TunnelStart = estimates.times[80]
-    run1TunnelEnd = estimates.times[63]
+    run2TunnelStart = estimates.times[79]
+    run2TunnelEnd = estimates.times[146]
+    run1TunnelEnd = estimates.times[61]
+    run1TunnelStart = estimates.times[4]
+    greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
     beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="Before Smoothing")
     afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="After Smoothing")
     est_to_gt_before_smoothing = np.zeros(estimates.times.shape, dtype=np.int)
@@ -326,8 +329,8 @@ def main():
 
     for i, est_t in enumerate(estimatesAfterSmoothing.times):
         est_to_gt_after_smoothing[i] = np.argmax(gts.times >= est_t)
-    errorFig = plotErrorsOverTime(estimates, estimatesAfterSmoothing, gts, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=[run1TunnelEnd, run2TunnelStart])
-    NeesFig = plotNEES(gts, estimates, estimatesAfterSmoothing, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=[run1TunnelEnd, run2TunnelStart])
+    errorFig = plotErrorsOverTime(estimates, estimatesAfterSmoothing, gts, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
+    NeesFig = plotNEES(gts, estimates, estimatesAfterSmoothing, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
 
     now = datetime.now()
