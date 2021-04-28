@@ -629,12 +629,6 @@ void Graph::_cloud2Map(){
     pcl::PointCloud<pointT> framePoints = *currentFeatureCloud;
     pcl::PointCloud<pointT> frameInWorld;
 
-    /*if (updateImu && imuEnabledFlag){
-        pcl::transformPointCloud(framePoints, frameInWorld, predImuState.pose().matrix());
-    }
-    else{
-        pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
-    }*/
     pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
     matcher.setInputSource(frameInWorld.makeShared());
     matcher.setInputTarget(cloudMapRefined);
@@ -859,12 +853,10 @@ void Graph::runOnce(int &runsWithoutUpdate)
         // #TODO: PROCESS IMU
 
         _postProcessIMU(); 
-        //_lateralEstimation();
-
+        
         _cloud2Map();
         
         _transformMapToWorld();
-        //_transformToGlobalMap();
 
         //std::cout << currentPoseInWorld << std::endl;
         _performIsam();

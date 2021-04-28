@@ -309,7 +309,7 @@ def main():
     from datetime import datetime
 
     filepath = "../data/"
-    matfile = "../data/april_2021/SimpleTunnel_Loop_5HzFreqLidar_ds.mat"
+    matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
     estimates, gts = bag2numpy(f'simpleTunnel_loopClosure.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
