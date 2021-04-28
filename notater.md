@@ -27,3 +27,6 @@
 ## MØTE 12.04.2021 - NTNU
 - LOOP CLOSURE DEN NESTE UKA
 - BE CLEAR AND SPECIFIC - NEVER LEAVE ANYTHING TO THE READER
+
+## Note to self: Mandag 26.04
+- Fikse gamle plots og tune til det siste datasettet (SimpleTunnel_BigLoop_5Hz.bag). Etterforsk hvorfor den estimerer feil på siste GNSS måling

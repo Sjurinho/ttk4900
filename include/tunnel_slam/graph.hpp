@@ -114,7 +114,7 @@ class Graph
         gtsam::Values initialEstimate, isamCurrentEstimate;
         gtsam::ISAM2 *isam;
 
-        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, imuPoseNoise, structureNoise, gnssNoise, loopClosureNoise;
+        gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, structureNoise, gnssNoise, loopClosureNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
@@ -160,7 +160,7 @@ class Graph
         void _publishReworkedMap();
         void _preProcessGNSS();
         bool _detectLoopClosure();
-        void _performLoopClosure();
+        bool _performLoopClosure();
         void _performIsamTimedOut();
         void _postProcessImuTimedOut();
 };

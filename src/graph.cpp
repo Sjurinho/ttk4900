@@ -50,10 +50,10 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.05;//0.0003924;
-  double gyro_noise_sigma = 1e-3;//1e-4;//8e-05;
+  double accel_noise_sigma = 0.02;//0.0003924;
+  double gyro_noise_sigma = 5e-3;//1e-4;//8e-05;
   double accel_bias_rw_sigma = 0.08;//0.001;//0.02;
-  double gyro_bias_rw_sigma = 0.003;//0.00002;//0.0001454441043;
+  double gyro_bias_rw_sigma = 0.003;//0.001;//0.00002;//0.0001454441043;
   gtsam::Matrix33 measured_acc_cov = gtsam::I_3x3 * pow(accel_noise_sigma, 2);
   gtsam::Matrix33 measured_omega_cov = gtsam::I_3x3 * pow(gyro_noise_sigma, 2);
   gtsam::Matrix33 integration_error_cov =
@@ -114,13 +114,11 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     priorSigmas << 0.001, 0.001, 1e-5, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
 
     gtsam::Vector6 odometrySigmas(6);
-    odometrySigmas << 0.05, 0.05, 1e-4, 0.01, 0.01, 0.01; // rad, rad, rad, m, m, m
-    gtsam::Vector6 imuSigmas(6);
-    imuSigmas << 5e-4, 5e-4, 5e-4, 0.01, 0.01, 0.05; // rad, rad, rad, m, m, m
+    odometrySigmas << 0.05, 0.05, 1e-4, 0.5, 0.5, 0.1; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
-    structureSigmas << 0.3, 0.3, 0.3; //m, m, m
+    structureSigmas << 0.5, 0.5, 0.5; //m, m, m
     gtsam::Vector3 gnssSigmas(3);
-    gnssSigmas << 0.1, 0.1, 0.1;
+    gnssSigmas << 0.7, 0.7, 0.2;
 
     downSizeFilterMap.setLeafSize(voxelRes, voxelRes, voxelRes);
 
@@ -142,9 +140,8 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     priorNoise = gtsam::noiseModel::Diagonal::Variances(priorSigmas);
     odometryNoise = gtsam::noiseModel::Diagonal::Variances(odometrySigmas);
     constraintNoise = gtsam::noiseModel::Diagonal::Variances(odometrySigmas);
-    imuPoseNoise = gtsam::noiseModel::Diagonal::Variances(imuSigmas);
     imuVelocityNoise = gtsam::noiseModel::Isotropic::Sigma(3, 0.1); // m/s
-    imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
+    imuBiasNoise = gtsam::noiseModel::Isotropic::Sigma(6, 0.01);
     structureNoise = gtsam::noiseModel::Diagonal::Variances(structureSigmas);
     gnssNoise = gtsam::noiseModel::Diagonal::Variances(gnssSigmas);
 
@@ -245,6 +242,7 @@ void Graph::_performIsam()
     initialEstimate.insert(X(index), currentPoseInWorld);
 
     if (updateImu){
+        std::cout << "UPDATE IMU " << std::endl;
         auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
 
         gtsam::CombinedImuFactor combinedImuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
@@ -312,6 +310,10 @@ void Graph::_mapToGraph(){
     matcher.setInputTarget(cloudMapFull);
     pcl::registration::CorrespondenceRejectorSampleConsensus<pointT> trimmer;
     trimmer.setInputTarget(cloudMapFull);
+    pcl::KdTreeFLANN<pointT> kdTree;
+    kdTree.setInputCloud(cloudMapRefined);
+    std::vector<int> indices;
+    std::vector<float> distances;
     //pcl::registration::CorrespondenceRejectorTrimmed trimmer;
     mtx.unlock();
 
@@ -330,7 +332,7 @@ void Graph::_mapToGraph(){
 
         pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
         matcher.setInputSource(cloudInWorld.makeShared());
-        matcher.determineReciprocalCorrespondences(*allCorrespondences, 0.6); 
+        matcher.determineReciprocalCorrespondences(*allCorrespondences, 2); 
         if (cloudInWorld.points.size() < 50)
             continue;
         pcl::CorrespondencesPtr trimmedCorrespondences(new pcl::Correspondences);
@@ -340,10 +342,14 @@ void Graph::_mapToGraph(){
         trimmer.getCorrespondences(*trimmedCorrespondences);
         if (trimmedCorrespondences->size() < minCorresponendencesStructure) continue;
         std::cout << "MAP CORRESPONDENCES: " << trimmedCorrespondences->size() << std::endl;
+        pcl::PointCloud<pointT>::Ptr currentMap(new pcl::PointCloud<pointT>(*cloudMapFull));
         for (int j = 0; j<trimmedCorrespondences->size(); j++){
 
             int pointIdx = trimmedCorrespondences->at(j).index_match;
             pointT pclPoint = cloudMapFull->at(pointIdx);
+            if (!cloudMapRefined->empty() && kdTree.radiusSearch(pclPoint, 1, indices, distances) > 0){
+                continue;
+            }
             gtsam::Point3 pointWorld = gtsam::Point3(pclPoint.x, pclPoint.y, pclPoint.y);
             pointT pclPointFrame = cloudInWorld.at(trimmedCorrespondences->at(j).index_query);
             gtsam::Point3 pointMeasured = gtsam::Point3(pclPointFrame.x, pclPointFrame.y, pclPointFrame.z);
@@ -395,10 +401,16 @@ void Graph::runLoopClosure()
     if (!loopClosureEnabledFlag)
         return;
     ros::Rate rate(0.25);
+    ros::Duration sleepTime(10);
     ROS_INFO("Loop Closure Thread Running");
     while (ros::ok()){
-        _performLoopClosure();
-        rate.sleep();
+        if (_performLoopClosure()){
+            ROS_INFO("LOOP CLOSURE REGISTERED, GOOD NIGHT");
+            sleepTime.sleep();
+        }
+        else{
+            rate.sleep();
+        }
     }
 }
 
@@ -413,8 +425,10 @@ bool Graph::_detectLoopClosure()
 
     std::vector<int> pointSearchIndLoop;
     std::vector<float> pointSearchSqDisLoop;
+    pcl::PointXYZ searchPoint = currentPosPoint;
+    searchPoint.x += 50*std::cos(currentPoseInWorld.rotation().yaw());
     kdtreeHistoryKeyPositions->setInputCloud(cloudKeyPositions);
-    kdtreeHistoryKeyPositions->radiusSearch(currentPosPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
+    kdtreeHistoryKeyPositions->radiusSearch(searchPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
     closestHistoryFrameID = -1;
     for (int i = 0; i < pointSearchIndLoop.size(); ++i){
         int id = pointSearchIndLoop[i];
@@ -447,10 +461,10 @@ bool Graph::_detectLoopClosure()
     return true;
 }
 
-void Graph::_performLoopClosure()
+bool Graph::_performLoopClosure()
 {
     if (cloudKeyPositions->points.empty()){
-        return;
+        return false;
     }
 
     if (!potentialLoopFlag){
@@ -459,7 +473,7 @@ void Graph::_performLoopClosure()
             potentialLoopFlag = true;
         }
         if (!potentialLoopFlag){
-            return;
+            return false;
         }
     }
     potentialLoopFlag = false;
@@ -487,7 +501,7 @@ void Graph::_performLoopClosure()
     std::cout << "ICP FITNESS SCORE: " << icp.getFitnessScore() << std::endl;
 
     if (icp.hasConverged() == false || icp.getFitnessScore() > historyKeyframeFitnessScore)
-        return;
+        return false;
     float x,y,z,roll,pitch,yaw;
     Eigen::Matrix4f trans = icp.getFinalTransformation();
     Eigen::Affine3f trans2;
@@ -504,15 +518,18 @@ void Graph::_performLoopClosure()
     gtsam::Vector6 Vector6(6);
     float noiseScore = icp.getFitnessScore();
     Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore, noiseScore;
+    //Vector6 << 0.3, 0.3, 0.01, 0.1, 0.1, 0.05;
     constraintNoise = gtsam::noiseModel::Diagonal::Variances(Vector6);
 
     // add to isam graph
     gtsam::NonlinearFactorGraph graph;
+    std::cout << "BETWEEN KEYPOSE #: " << latestFrameIDLoopClosure << " AND " << closestHistoryFrameID << std::endl;
     graph.add(gtsam::BetweenFactor<gtsam::Pose3>(X(latestFrameIDLoopClosure+1), X(closestHistoryFrameID+1), poseFrom.between(poseTo), constraintNoise));
     std::lock_guard<std::mutex> lock(mtx);
     isam->update(graph);
     isam->update();
-    PointXYZRPY currentPose;
+    return true;
+    /*PointXYZRPY currentPose;
     isamCurrentEstimate = isam->calculateBestEstimate();
     int numPoses = cloudKeyPositions->size();
     cloudKeyPositions->clear();
@@ -527,7 +544,7 @@ void Graph::_performLoopClosure()
         cloudKeyPoses->push_back(currentPose);
     }
     currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(X(numPoses));
-    //aLoopIsClosed = true;
+    //aLoopIsClosed = true;*/
 }
 
 void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
@@ -625,6 +642,7 @@ void Graph::_cloud2Map(){
     trimmer.getCorrespondences(*partialOverlapCorrespondences);
 
     int nPoints = partialOverlapCorrespondences->size();
+    std::cout << "Correspondences map alignment: " << nPoints << std::endl;
     if (nPoints < minCorresponendencesStructure)
         return;
     int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
@@ -870,7 +888,8 @@ void Graph::runOnce(int &runsWithoutUpdate)
         imuComparisonTimerPtr = &(gnssMeasurement.first);
         if(updateImu){
             predImuState = preintegrated->predict(prevImuState, prevImuBias);
-
+            std::cout << "Previous IMU: " << prevImuState << std::endl;
+            std::cout << "Predicted IMU: " << predImuState << std::endl;
             currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
             currentPoseInWorld = predImuState.pose();
             _performIsamTimedOut();
@@ -883,15 +902,48 @@ void Graph::runOnce(int &runsWithoutUpdate)
             
         }
         mtx.unlock();
-    }/* Uncomment when imu only is to be used
-    else if (imuMeasurements.size() > 0 && timeOdometry + 3.5 < imuMeasurements.back().first){
+    }
+    else if (imuMeasurements.size() > 0 && *imuComparisonTimerPtr + 4 < imuMeasurements.back().first){
         mtx.lock();
         imuComparisonTimerPtr = &(imuMeasurements.back().first);
         if (updateImu){
             predImuState = preintegrated->predict(prevImuState, prevImuBias);
             currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
-            currentPoseInWorld = predImuState.pose();
+            //currentPoseInWorld = predImuState.pose();
+            previousPosPoint = currentPosPoint;
             updateImu = false;
+            newKeyPose = true;
+
+            uint64_t index = cloudKeyPositions->points.size()+1;
+            std::cout << "INDEX " << index << std::endl;
+            auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
+            gtsam::CombinedImuFactor combinedImuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
+
+            _graph.add(combinedImuFactor);
+            initialEstimate.insert(X(index), predImuState.pose());
+            initialEstimate.insert(V(index), predImuState.v());
+            initialEstimate.insert(B(index), prevImuBias);
+
+            PointXYZRPY currentPose;
+            isam->update(_graph, initialEstimate);
+            isam->update();
+            _graph.resize(0);
+            initialEstimate.clear();
+
+            isamCurrentEstimate = isam->calculateEstimate();
+            prevImuState = gtsam::NavState(isamCurrentEstimate.at<gtsam::Pose3>(X(index)), isamCurrentEstimate.at<gtsam::Vector3>(V(index)));
+            prevImuBias = isamCurrentEstimate.at<gtsam::imuBias::ConstantBias>(B(index));
+            preintegrated->resetIntegrationAndSetBias(prevImuBias);
+
+            currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(X(index));
+            cloudKeyPositions->push_back(pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z()));
+            _fromPose3ToPointXYZRPY(currentPoseInWorld, currentPose);
+            cloudKeyPoses->push_back(currentPose);
+
+            pcl::PointCloud<pointT>::Ptr thisKeyFrame(new pcl::PointCloud<pointT>());
+            cloudKeyFrames.push_back(thisKeyFrame);
+            cloudsInQueue += 1;
+            
             geometry_msgs::PoseWithCovarianceStamped poseWCov;
             poseWCov.header.frame_id = "map";
             poseWCov.header.stamp = timer.fromSec(*imuComparisonTimerPtr);
@@ -904,16 +956,17 @@ void Graph::runOnce(int &runsWithoutUpdate)
             poseWCov.pose.pose.orientation.z  = currentPoseInWorld.rotation().toQuaternion().z();
             int row = 0;
             int col = 0;
-            /*std::map<int, int> map = {{0, 3}, {1,4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}};
+            gtsam::Matrix cov = isam->marginalCovariance(X(index));
+            std::map<int, int> map = {{0, 3}, {1,4}, {2, 5}, {3, 0}, {4, 1}, {5, 2}};
             for (int i=0; i<36; i++){
                 row = i / 6;
                 col = i % 6;
-                poseWCov.pose.covariance.at(i)= (double) preintegrated(map[row], map[col]);
+                poseWCov.pose.covariance.at(i)= (double) cov(map[row],map[col]);
             }
             pubTransformedPose.publish(poseWCov);
         }
         mtx.unlock();
-    }*/
+    }
 }
 
 void Graph::_performIsamTimedOut(){
@@ -924,7 +977,7 @@ void Graph::_performIsamTimedOut(){
     uint64_t index = cloudKeyPositions->points.size()+1;
     initialEstimate.insert(X(index), currentPoseInWorld);
     auto preintImuCombined = dynamic_cast<const gtsam::PreintegratedCombinedMeasurements&>(*preintegrated);
-
+    std::cout << "INDEX GNSS ISAM: " << index << std::endl;
     gtsam::CombinedImuFactor combinedImuFactor(X(index-1), V(index-1), X(index), V(index), B(index-1), B(index), preintImuCombined);
 
     _graph.add(combinedImuFactor);
@@ -985,20 +1038,22 @@ void Graph::_preProcessGNSS(){
 
 void Graph::_preProcessIMU(){
     int measurements = imuMeasurements.size();
-    //int i = 0;
+    int i = 0;
     for (auto it = imuMeasurements.begin(); it != imuMeasurements.end(); it++){
         std::pair<double, gtsam::Vector6> measurementWithStamp = *it;
-        //std::cout << "measurementWithStamp: " << measurementWithStamp.first << " timePrev:" << timePrevPreintegratedImu << " TimeOdometry: "<< timeOdometry << std::endl;
         if (measurementWithStamp.first < *imuComparisonTimerPtr){
+            /*std::cout << "imuComparisonTimer: " << *imuComparisonTimerPtr << ", measurementWithStamp: " << measurementWithStamp.first << "\n" << measurementWithStamp.second << std::endl;*/
             double dt = measurementWithStamp.first - timePrevPreintegratedImu;
             preintegrated->integrateMeasurement(measurementWithStamp.second.head<3>(), measurementWithStamp.second.tail<3>(), dt);
             timePrevPreintegratedImu = measurementWithStamp.first;
             //imuMeasurements.pop_front();
-            //i--;
-            it = imuMeasurements.erase(it);
+            i++;
             updateImu=true;
         }
-        else break;
+        else {
+            imuMeasurements.erase(imuMeasurements.begin(), imuMeasurements.begin() + i);
+            break;
+        };
     }
 }
 
