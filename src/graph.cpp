@@ -118,7 +118,7 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     gtsam::Vector3 structureSigmas(3);
     structureSigmas << 0.5, 0.5, 0.5; //m, m, m
     gtsam::Vector3 gnssSigmas(3);
-    gnssSigmas << 0.7, 0.7, 0.2;
+    gnssSigmas << 2, 2, 0.2;
 
     downSizeFilterMap.setLeafSize(voxelRes, voxelRes, voxelRes);
 
