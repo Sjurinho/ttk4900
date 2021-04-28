@@ -19,3 +19,14 @@
 
 ## MØTE 1.03.2021 - NTNU
 - Include uncertainty analysis in the thesis. How it develops over time, etc.
+
+
+## Note to self
+- Istedenfor å dele opp på måten jeg har gjort, heller bruke initialestimates.exist for å sjekke om det allerede finnes et estimat for en verdi. Kjøre IMUprosessering rent for både GPS og Lidar-odometri.
+
+## MØTE 12.04.2021 - NTNU
+- LOOP CLOSURE DEN NESTE UKA
+- BE CLEAR AND SPECIFIC - NEVER LEAVE ANYTHING TO THE READER
+
+## Note to self: Mandag 26.04
+- Fikse gamle plots og tune til det siste datasettet (SimpleTunnel_BigLoop_5Hz.bag). Etterforsk hvorfor den estimerer feil på siste GNSS måling

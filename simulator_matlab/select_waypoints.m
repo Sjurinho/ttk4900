@@ -1,12 +1,14 @@
 
 if exist('scenario', 'var') == 0
-    scenario = 'straightTunnel';
+    scenario = 'straightTunnel_long';
 end
     
 sceneImage = imread(strcat(scenario, '.png'));
 imageSize = size(sceneImage);
-xlims = [-1530, 27750]; %cm
-ylims = [-1750, 1450]; %cm
+%xlims = [-1530, 27750]; %cm
+%ylims = [-1750, 1450]; %cm
+xlims = [-10000.0, 35000.0]; %cm
+ylims = [-3000.0, 2000.0]; %cm
 
 sceneRef = imref2d(imageSize,xlims/100,ylims/100);
 

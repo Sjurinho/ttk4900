@@ -13,6 +13,7 @@ int main(int argc, char** argv)
     
     Graph node(nh,pnh); // Creating the object
     std::thread refineThread(&Graph::runRefine, &node);
+    std::thread loopClosureThread(&Graph::runLoopClosure, &node);
 
     ros::Rate rate(10); // Defing the looping rate
 
@@ -26,6 +27,7 @@ int main(int argc, char** argv)
         rate.sleep();
     }
     refineThread.join();
+    loopClosureThread.join();
     std::cout << "SHUTTING DOWN - SAVING GRAPH" << std::endl;
     node.writeToFile();
     return 0;

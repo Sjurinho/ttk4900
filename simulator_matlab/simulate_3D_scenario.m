@@ -4,7 +4,7 @@
 % refPosesY = data.RefPath.refPosesY;
 % refPosesT = data.RefPath.refPosesT;
 
-scenario = 'straightTunnel';
+scenario = 'straightTunnel_long';
 wp_fn = strcat('refpath_nonsmooth_', scenario, '.mat');
 inputstr = "Would you like to create a new scenario?";
 
@@ -26,12 +26,13 @@ end
 numPoses = size(refPath, 1);
 
 refDirections  = ones(numPoses,1);   % Forward-only motion
-numSmoothPoses = 5 * numPoses;       % Increase this to increase the number of returned poses
+numSmoothPoses = 50 * numPoses;       % Increase this to increase the number of returned poses
+refVelocities  = 6 * ones(numPoses,1);
 
 setImuParameters;
 setLidarParameters;
 
-T = 60;
+T = 240;
 plotWaypoints(scenario, refPath);
 
 modelName = 'sim3d';

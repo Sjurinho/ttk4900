@@ -40,7 +40,11 @@ def euler_to_quaternion(roll, pitch, yaw):
         return [qx, qy, qz, qw]
 
 def mat2pointcloud(filename):
-    m = sio.loadmat(filename, simplify_cells=True)
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
     ptClouds = m['simple_tunnel_ds']['frontBumperLidar']['ptCloud']
     times = m['simple_tunnel_ds']['frontBumperLidar']['time']
     frequency = m['simple_tunnel_ds']['frontBumperLidar']['specs']['frequency']
@@ -55,27 +59,39 @@ def csv2pointcloud(filename, nscans):
     return scans
 
 def mat2ImuData(filename):
-    m = sio.loadmat(filename, simplify_cells=True)
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
     acc = m['simple_tunnel_ds']['imu']['accelerometer'].T
     gyro = m['simple_tunnel_ds']['imu']['gyroscope'].T
     time = m['simple_tunnel_ds']['imu']['time'].T
     return ImuData(acc, gyro, time)
 
 def mat2GTData(filename):
-    m = sio.loadmat(filename, simplify_cells=True)
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
     Pos = m['simple_tunnel_ds']['Pgt']['signals']['values'].T
     Ori = m['simple_tunnel_ds']['Thetagt']['signals']['values'].T
     time = m['simple_tunnel_ds']['Pgt']['time'].T
     return GTData(Pos, Ori, time)
 
 def mat2GNSSData(filename):
-    m = sio.loadmat(filename, simplify_cells=True)
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
     gnss_pos = m['simple_tunnel_ds']['gnss']['measurements']
     gnss_time = m['simple_tunnel_ds']['gnss']['times']
     return GNSSData(gnss_pos, gnss_time)
 
 def mat2bag(bagname, freq=15):
-    filename = 'SimpleTunnel_IMUGNSS_LongTime_straightPath_ds'
+    filename = 'SimpleTunnel_BigLoop_ds.mat'
     scans, times, freq = mat2pointcloud(filename)
     imuData = mat2ImuData(filename)
     gtData = mat2GTData(filename)
@@ -189,7 +205,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
 
 def main():
     rospy.init_node('data2bag')
-    mat2bag('SimpleTunnel_IMUGNSS_LongTime_straightPath_ds.bag')
+    mat2bag('SimpleTunnel_BigLoop_5Hz.bag')
     #csv2bag('real.bag')
 if __name__ == '__main__':
 	main()
