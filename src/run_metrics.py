@@ -311,11 +311,11 @@ def main():
     filepath = "../data/"
     matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
-    estimates, gts = bag2numpy(f'simpleTunnel_loopClosure.bag')
+    estimates, gts = bag2numpy(f'simpleTunnel_big_loopClosure.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
-    run2TunnelStart = estimates.times[79]
-    run2TunnelEnd = estimates.times[146]
-    run1TunnelEnd = estimates.times[61]
+    run2TunnelStart = estimates.times[103]
+    run2TunnelEnd = estimates.times[172]
+    run1TunnelEnd = estimates.times[60]
     run1TunnelStart = estimates.times[4]
     greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
     beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="Before Smoothing")
@@ -323,12 +323,12 @@ def main():
     est_to_gt_before_smoothing = np.zeros(estimates.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimates.times):
-        est_to_gt_before_smoothing[i] = np.argmax(gts.times >= est_t)
+        est_to_gt_before_smoothing[i] = np.argmax(gts.times > est_t)
     
     est_to_gt_after_smoothing = np.zeros(estimatesAfterSmoothing.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimatesAfterSmoothing.times):
-        est_to_gt_after_smoothing[i] = np.argmax(gts.times >= est_t)
+        est_to_gt_after_smoothing[i] = np.argmax(gts.times > est_t)
     errorFig = plotErrorsOverTime(estimates, estimatesAfterSmoothing, gts, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     NeesFig = plotNEES(gts, estimates, estimatesAfterSmoothing, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
@@ -350,6 +350,21 @@ def main():
         estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
         estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.pdf", format='pdf', bbox_inches="tight")
     
+    fig, ax = plt.subplots(2, 1, figsize=(10,10))
+    ax[0].plot(gts.times[est_to_gt_after_smoothing], gts.positions[est_to_gt_after_smoothing, 1] - estimatesAfterSmoothing.positions[:, 1], label="Y error")
+    ax[0].plot(estimatesAfterSmoothing.times, gts.positions[est_to_gt_after_smoothing, 0] - estimatesAfterSmoothing.positions[:, 0], label="X error after smoothing")
+    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 1] - estimates.positions[:, 1], label="Y error")
+    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 0] - estimates.positions[:, 0], label="X error")
+    #ax.plot(gts.times, gts.positions[:, 0], label="True")
+    #ax.plot(estimatesAfterSmoothing.times, estimatesAfterSmoothing.positions[:, 0], label="Estimated")
+    ax[0].legend()
+    ax[1].legend()
+
+    fig, ax = plt.subplots(1, 1, figsize=(10,10))
+    ax.plot(gts.times, np.rad2deg(gts.orientations[:, 2]), label="True")
+    ax.plot(estimates.times, np.rad2deg(estimates.orientations[:, 2]), label="Estimate")
+    ax.legend()
+
     imExtent = [-100, 350, 20, -30]
     experimentFig = plotExperiment(gts, imfile, matfile, imExtent=imExtent)
     experimentFig.savefig(figfolder + "/experiment.pdf", format='pdf', bbox_inches="tight")
