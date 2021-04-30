@@ -84,22 +84,22 @@ class Graph
 
         // Optimization parameters
         bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=true;
-        double voxelRes = 0.2;
+        double voxelRes = 0.1;
         double keyFrameSaveDistance = 3;
-        double minCorresponendencesStructure = 20;
+        double minCorresponendencesStructure = 30;
         int cloudsInQueue = 0;
 
-        int historyKeyFrameSearchRadius = 50;
+        int historyKeyFrameSearchRadius = 20;
         int closestHistoryFrameID = -1;
         int latestFrameIDLoopClosure = 0;
-        int historyKeyFrameSearchNum = 4;
-        float historyKeyframeFitnessScore = 2; // the smaller the better alignment
+        int historyKeyFrameSearchNum = 3;
+        float historyKeyframeFitnessScore = 0.8; // the smaller the better alignment
         bool aLoopIsClosed = false;
         bool potentialLoopFlag = false;
 
-        int maxIterSmoothing = 30;
+        int maxIterSmoothing = 100;
         float fxTol = 0.05;
-        double stepTol = 1e-5;
+        double stepTol = 1e-6;
         double delayTol = 1;
 
         double* imuComparisonTimerPtr;
@@ -108,7 +108,7 @@ class Graph
         std::mutex mtx;
 
         double timeOdometry, timeMap, timePrevPreintegratedImu, timeKeyPose = 0;
-        bool newLaserOdometry=false, newMap=false, newGroundPlane=false, newImu=false, updateImu=false, newGnss=false, newGnssInGraph = false;
+        bool newLaserOdometry=false, newMap=false, newGroundPlane=false, newImu=false, updateImu=false, newGnss=false, reinitialize=false;
         // gtsam estimation members
         gtsam::NonlinearFactorGraph _graph;
         gtsam::Values initialEstimate, isamCurrentEstimate;
