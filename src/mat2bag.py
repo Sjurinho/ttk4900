@@ -91,7 +91,7 @@ def mat2GNSSData(filename):
     return GNSSData(gnss_pos, gnss_time)
 
 def mat2bag(bagname, freq=15):
-    filename = 'SimpleTunnel_BigLoop_ds.mat'
+    filename = 'SimpleTunnel_straightPath_5Hz.mat'
     scans, times, freq = mat2pointcloud(filename)
     imuData = mat2ImuData(filename)
     gtData = mat2GTData(filename)
@@ -189,7 +189,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
                     orientation.w = orientationQuatList[3]
 
                     poseMsg.header.stamp = rospy.Time.from_sec(groundTruthData.time[n])
-                    poseMsg.header.frame_id = 'world'
+                    poseMsg.header.frame_id = 'map'
                     poseMsg.pose.position = position
                     poseMsg.pose.orientation = orientation
 
@@ -205,7 +205,7 @@ def write_bag(scans, times, bagname, rate:rospy.Rate, useImu=False, imuData:ImuD
 
 def main():
     rospy.init_node('data2bag')
-    mat2bag('SimpleTunnel_BigLoop_5Hz.bag')
+    mat2bag('SimpleTunnel_straightPath_5Hz.bag')
     #csv2bag('real.bag')
 if __name__ == '__main__':
 	main()

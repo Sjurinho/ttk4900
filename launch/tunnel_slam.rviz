@@ -8,6 +8,7 @@ Panels:
         - /Global1
         - /Global1/CurrentPose1
         - /Global1/CurrentPose1/Covariance1
+        - /Global1/GroundTruth1
         - /Local1
         - /Local1/SmoothedMap1
         - /Local1/CurrentFeatureCloudInWorld1
@@ -141,6 +142,21 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
+        - Alpha: 1
+          Axes Length: 1
+          Axes Radius: 0.10000000149011612
+          Class: rviz/Pose
+          Color: 196; 160; 0
+          Enabled: true
+          Head Length: 3
+          Head Radius: 1
+          Name: GroundTruth
+          Shaft Length: 1
+          Shaft Radius: 1
+          Shape: Arrow
+          Topic: /ground_truth
+          Unreliable: false
+          Value: true
       Enabled: true
       Name: Global
     - Class: rviz/Group
@@ -434,10 +450,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: -0.17999954521656036
+      Pitch: 0.19000044465065002
       Target Frame: <Fixed Frame>
       Value: ThirdPersonFollower (rviz)
-      Yaw: 0.044915709644556046
+      Yaw: 0.08991572260856628
     Saved: ~
 Window Geometry:
   Displays:

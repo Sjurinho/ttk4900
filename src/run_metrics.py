@@ -234,16 +234,16 @@ def plotErrorsOverTime(estimatesBeforeSmoothing, estimatesAfterSmoothing, gts, m
     # Before smoothing
     axs[0].plot(gts.times[matchesBeforeSmoothing], np.linalg.norm(estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing], ord=2, axis=1), label="Before Smoothing")
     if len(greyArea) > 0:
-        axs[0].axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-        axs[0].axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+        axs[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        axs[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[0].set_xlim([0, gts.times[-1]])
 
     axs[0].set_title("XY Position Error")
     axs[0].set_ylabel("Error [m]")
     axs[1].plot(gts.times[matchesBeforeSmoothing], func(np.rad2deg(estimatesBeforeSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesBeforeSmoothing, -1])), label="Before Smoothing")
     if len(greyArea) > 0:
-        axs[1].axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-        axs[1].axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+        axs[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        axs[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[1].set_xlim([0, gts.times[-1]])
     axs[1].set_ylabel("Error [deg]")
     axs[1].set_title("Heading Error")
@@ -287,8 +287,8 @@ def plotNEES(gts:PoseData, estimatesBeforeSmoothing:PoseData, estimatesAfterSmoo
     ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]))
     ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]))
     if len(greyArea) > 0:
-        ax.axvspan(0, greyArea[0], facecolor='grey', alpha=0.3)
-        ax.axvspan(greyArea[1], gts.times[-1], facecolor='grey', alpha=0.3)
+        ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     ax.set_xlim([0, gts.times[-1]])
     ax.legend()
     return fig
@@ -322,14 +322,13 @@ def main():
     beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="Before Smoothing")
     afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="After Smoothing")
     est_to_gt_before_smoothing = np.zeros(estimates.times.shape, dtype=np.int)
-
     for i, est_t in enumerate(estimates.times):
         est_to_gt_before_smoothing[i] = np.argmax(gts.times >= est_t)
-    
     est_to_gt_after_smoothing = np.zeros(estimatesAfterSmoothing.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimatesAfterSmoothing.times):
         est_to_gt_after_smoothing[i] = np.argmax(gts.times >= est_t)
+    print(estimatesAfterSmoothing.times, gts.times[-10:])
     errorFig = plotErrorsOverTime(estimates, estimatesAfterSmoothing, gts, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     NeesFig = plotNEES(gts, estimates, estimatesAfterSmoothing, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
@@ -351,6 +350,21 @@ def main():
         estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
         estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.pdf", format='pdf', bbox_inches="tight")
     
+    fig, ax = plt.subplots(2, 1, figsize=(10,10))
+    ax[0].plot(gts.times[est_to_gt_after_smoothing], gts.positions[est_to_gt_after_smoothing, 1] - estimatesAfterSmoothing.positions[:, 1], label="Y error")
+    ax[0].plot(estimatesAfterSmoothing.times, gts.positions[est_to_gt_after_smoothing, 0] - estimatesAfterSmoothing.positions[:, 0], label="X error after smoothing")
+    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 1] - estimates.positions[:, 1], label="Y error")
+    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 0] - estimates.positions[:, 0], label="X error")
+    #ax.plot(gts.times, gts.positions[:, 0], label="True")
+    #ax.plot(estimatesAfterSmoothing.times, estimatesAfterSmoothing.positions[:, 0], label="Estimated")
+    ax[0].legend()
+    ax[1].legend()
+
+    fig, ax = plt.subplots(1, 1, figsize=(10,10))
+    ax.plot(gts.times, np.rad2deg(gts.orientations[:, 2]), label="True")
+    ax.plot(estimates.times, np.rad2deg(estimates.orientations[:, 2]), label="Estimate")
+    ax.legend()
+
     imExtent = [-100, 350, 20, -30]
     experimentFig = plotExperiment(gts, imfile, matfile, imExtent=imExtent)
     experimentFig.savefig(figfolder + "/experiment.pdf", format='pdf', bbox_inches="tight")
