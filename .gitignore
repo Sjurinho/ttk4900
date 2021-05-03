@@ -296,10 +296,15 @@ TSWLatexianTemp*
 # Uncomment the next line to have this generated file ignored.
 #*Notes.bib
 
-data/*
+/data/**
 !data/usage.txt
+!data/recorded_runs/
+!data/recorded_runs/python_plots
 !data/recorded_runs/python_plots/Saved/
-!data/recorded_runs/python_plots/Saved/newestSensorComparisons/*
+!data/recorded_runs/python_plots/Saved/newestSensorComparisons/
+!data/recorded_runs/python_plots/Saved/newestSensorComparisons/**
+!data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/
+!data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/**
 **/*__pycache__/
 __pycache__/
 
