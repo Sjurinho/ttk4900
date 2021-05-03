@@ -298,6 +298,8 @@ TSWLatexianTemp*
 
 data/*
 !data/usage.txt
+!data/recorded_runs/python_plots/Saved/
+!data/recorded_runs/python_plots/Saved/newestSensorComparisons/*
 **/*__pycache__/
 __pycache__/
 
