@@ -23,6 +23,7 @@
 #include <pcl/registration/transformation_estimation_2D.h>
 #include <pcl/registration/transformation_estimation_point_to_plane.h>
 #include <pcl/registration/gicp.h>
+#include <pcl/registration/icp_nl.h>
 
 #include <tf_conversions/tf_eigen.h>
 #include <tf/transform_broadcaster.h>
@@ -35,7 +36,7 @@ FeatureAssociation::FeatureAssociation(ros::NodeHandle &nh, ros::NodeHandle &pnh
 {   
     nh_ = nh;
     ROS_INFO("Initializing Feature Association Node");
-
+    pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
     // Subscribers and publishers
     subPointCloud2          = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 32, &FeatureAssociation::pointCloud2Handler, this);
     pubGroundPlaneCloud2    = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32);
@@ -196,8 +197,12 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     //Calculate transformation
     //pcl::registration::TransformationEstimationPointToPlane<pcl::PointNormal, pcl::PointNormal> tEst;
     pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal> tEst;
+    //pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> tEst;
     //pcl::registration::TransformationEstimationLM<pcl::PointNormal, pcl::PointNormal> tEst;
     Eigen::Matrix4f T;
+    /*tEst.setInputSource(featureCloud.makeShared());
+    tEst.setInputTarget(_prevFeatureCloud.makeShared());
+    goodCorrespondences->*/
 
 
     tEst.estimateRigidTransformation(featureCloud, _prevFeatureCloud, *goodCorrespondences, T);
@@ -230,8 +235,9 @@ void FeatureAssociation::_publishTransformation()
             return;
         
         // Unstable
-        if (abs(delta_x) > 5 || abs(delta_y) > 5 || abs(delta_z) > 5 || abs(delta_x) + abs(delta_y) > 7)
+        if (abs(delta_x) > 4 || abs(delta_y) > 2 || abs(delta_z) > 2){
             return;
+        }
 
         geometry_msgs::TransformStamped tfMsg   = tf2::eigenToTransform(transformation);
         tfMsg.header.stamp                      = currentTime;

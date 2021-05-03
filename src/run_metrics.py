@@ -307,15 +307,16 @@ def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 20]):
 def main():
     import os
     from datetime import datetime
-
     filepath = "../data/"
+    #filepath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/4/"
     matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
     estimates, gts = bag2numpy(f'simpleTunnel_big_loopClosure.bag')
+    #estimates, gts = bag2numpy(f'{filepath}simpleTunnel_big_loopClosure.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
-    run2TunnelStart = estimates.times[103]
-    run2TunnelEnd = estimates.times[172]
-    run1TunnelEnd = estimates.times[60]
+    run2TunnelStart = estimates.times[107]
+    run2TunnelEnd = estimates.times[175]
+    run1TunnelEnd = estimates.times[62]
     run1TunnelStart = estimates.times[4]
     greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
     beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="Before Smoothing")
@@ -329,6 +330,7 @@ def main():
 
     for i, est_t in enumerate(estimatesAfterSmoothing.times):
         est_to_gt_after_smoothing[i] = np.argmax(gts.times > est_t)
+
     errorFig = plotErrorsOverTime(estimates, estimatesAfterSmoothing, gts, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     NeesFig = plotNEES(gts, estimates, estimatesAfterSmoothing, est_to_gt_before_smoothing, est_to_gt_after_smoothing, greyArea=greyArea)
     estimatedMapWithTrajectory = plotMapWithTrajectory(estimatesAfterSmoothing.positions, landmarks)
@@ -355,6 +357,7 @@ def main():
     ax[0].plot(estimatesAfterSmoothing.times, gts.positions[est_to_gt_after_smoothing, 0] - estimatesAfterSmoothing.positions[:, 0], label="X error after smoothing")
     ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 1] - estimates.positions[:, 1], label="Y error")
     ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 0] - estimates.positions[:, 0], label="X error")
+    print(gts.times[est_to_gt_after_smoothing][-5:], estimatesAfterSmoothing.times[-5:])
     #ax.plot(gts.times, gts.positions[:, 0], label="True")
     #ax.plot(estimatesAfterSmoothing.times, estimatesAfterSmoothing.positions[:, 0], label="Estimated")
     ax[0].legend()
