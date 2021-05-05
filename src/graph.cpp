@@ -692,7 +692,6 @@ void Graph::_cloud2Map(){
             pointT pointInWorld = frameInWorld.at(sourceIndex);
             pointT pointInLocalFrame = framePoints.at(sourceIndex);
             pointT matchedPointMap = cloudMapRefined->at(targetIndex);
-            //#TODO: Extract points first, then do optimization?
 
             // Extract points
             auto q_wj = gtsam::Point3(matchedPointMap.x, matchedPointMap.y, matchedPointMap.z);

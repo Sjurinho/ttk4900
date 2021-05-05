@@ -1,3 +1,4 @@
+from datetime import time
 import numpy as np
 import math
 import scipy.io as sio
@@ -7,8 +8,9 @@ import pandas as pd
 
 import rospy
 import rosbag
+import os
+from datetime import datetime
 
-from geometry_msgs.msg import Vector3, PoseStamped, Point, Quaternion, PoseWithCovarianceStamped
 
 class PoseData:
     def __init__(self, positions, orientations, times, covs=None):
@@ -304,9 +306,41 @@ def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 20]):
     #plt.savefig("experiment.pdf", format="pdf", bbox_inches="tight")
     return fig
 
+def plotIMUvsRealLinAcc(filename:str):
+    try:
+        m = sio.loadmat(filename, simplify_cells=True)
+    except:
+        import mat73
+        m = mat73.loadmat(filename)
+    imu_linacc = m['simple_tunnel_ds']['imu']['accelerometer'].T
+    imu_time = m['simple_tunnel_ds']['imu']['time']
+    imu_gyro = m['simple_tunnel_ds']['imu']['gyroscope'].T
+    linacc = m['simple_tunnel_ds']['linear_acc']['signals']['values']
+    angularvel = m['simple_tunnel_ds']['angular_rate']['signals']['values']
+    time = m['simple_tunnel_ds']['angular_rate']['time']
+
+    fig, ax = plt.subplots(2, 1, figsize=(10,10)) #Looks better with this size
+    ax[0].plot(imu_time, imu_linacc, label=r"$a_{imu}$")
+    ax[0].plot(time, linacc, "--", label=r"$a_{true}$")
+    ax[0].legend()
+    ax[0].set_title("Accelerometer")
+    ax[1].plot(imu_time, imu_gyro, label=r"$\omega_{imu}$")
+    ax[1].plot(time, angularvel, "--", label=r"$\omega_{true}$")
+    ax[1].legend()
+    ax[1].set_title("Gyroscope")
+    
+    now = datetime.now()
+    dt_string = now.strftime("%d-%m-%Y_%H:%M:%S")
+    figfolder = f"../simulator_matlab/"
+
+    fig.savefig(figfolder + "/imuVsTruth.pdf", format='pdf', bbox_inches="tight")
+
+
+
+
+
+
 def main():
-    import os
-    from datetime import datetime
     filepath = "../data/"
     #filepath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/4/"
     matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
@@ -374,4 +408,6 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    #main()
+    matfile = "../data/april_2021/SimpleTunnel_BigLoop_WithTrueAccAndAngularRate.mat"
+    plotIMUvsRealLinAcc(matfile)
