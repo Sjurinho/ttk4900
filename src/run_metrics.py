@@ -3,7 +3,7 @@ import numpy as np
 import math
 import scipy.io as sio
 import matplotlib.pyplot as plt
-import matplotlib
+import matplotlib as mpl
 import pandas as pd
 
 import rospy
@@ -11,6 +11,8 @@ import rosbag
 import os
 from datetime import datetime
 
+mpl.style.use('seaborn')
+plt.rcParams["lines.markeredgewidth"] = 0.5
 
 class PoseData:
     def __init__(self, positions, orientations, times, covs=None):
@@ -44,7 +46,7 @@ def plot_cov_ellipse2d(
     edgecolor: "Color" = "C0",
     facecolor: "Color" = "none",
     **kwargs,  # extra Ellipse keyword arguments
-) -> matplotlib.patches.Ellipse:
+) -> mpl.patches.Ellipse:
     """Plot a n_sigma covariance ellipse centered in mean into ax."""
     try:
         ell_trans_mat = np.zeros((3, 3))
@@ -52,7 +54,7 @@ def plot_cov_ellipse2d(
         ell_trans_mat[:2, 2] = mean
         ell_trans_mat[2, 2] = 1
 
-        ell = matplotlib.patches.Ellipse(
+        ell = mpl.patches.Ellipse(
             (0.0, 0.0),
             2.0 * n_sigma,
             2.0 * n_sigma,
@@ -61,7 +63,7 @@ def plot_cov_ellipse2d(
             angle=np.rad2deg(yaw),
             **kwargs,
         )
-        trans = matplotlib.transforms.Affine2D(ell_trans_mat)
+        trans = mpl.transforms.Affine2D(ell_trans_mat)
         ell.set_transform(trans + ax.transData)
         return ax.add_patch(ell)
     except:
@@ -152,12 +154,13 @@ def csv2numpy(filename: str, other_estimate: PoseData):
     estimates = PoseData(estimate_positions, estimate_orientations, estimate_times, estimate_covariances.reshape(-1, 6, 6))
     return estimates, serVelocities, serLandmarks, serBiases
 
-def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim=[-10, 10], ylim=[0, 240]):
-    fig, ax = plt.subplots(1, 2, clear=True, figsize=(10,10), sharey=True)
+def plotTrajectory2D(estimatesBeforeSmoothing:PoseData, estimatesAfterSmoothing:PoseData, gts:PoseData, skipPlt=4, title="", xlim=[-10, 10], ylim=[0, 240]):
+    fig, ax = plt.subplots(1, 3, clear=True, figsize=(10,10), sharey=True)
     fig.suptitle(title)
-    ax[0].set_title("Estimate vs Ground Truth")
-    ax[0].plot(estimates.positions[:, 1], estimates.positions[:, 0], label=r'$\hat{x}$')
-    ax[0].plot(gts.positions[:, 1], gts.positions[:, 0], label=r'$x$')
+    ax[0].set_title("Position")
+    ax[0].plot(gts.positions[:, 1], gts.positions[:, 0], color='C0', label=r'$Ground Truth$')
+    ax[0].plot(estimatesBeforeSmoothing.positions[:, 1], estimatesBeforeSmoothing.positions[:, 0], color='C1', label=r'$Before Smoothing$')
+    ax[0].plot(estimatesAfterSmoothing.positions[:, 1], estimatesAfterSmoothing.positions[:, 0], color='C2', label=r'$After Smoothing$')
     ax[0].legend()
     ax[0].set_ylabel("North [m]")
     ax[0].set_xlabel("West [m]")
@@ -165,17 +168,29 @@ def plotTrajectory2D(estimates:PoseData, gts:PoseData, skipPlt=4, title="", xlim
     ax[0].set_ylim(*ylim)
 
     #fig2, ax2 = plt.subplots(clear=True, figsize=(10,10))
-    ax[1].set_title("Estimate with Covariance")
-    for i, (position, orientation, cov) in enumerate(zip(estimates.positions, estimates.orientations, estimates.covariances)):
+    ax[1].set_title("Before Smoothing with Covariance")
+    for i, (position, orientation, cov) in enumerate(zip(estimatesBeforeSmoothing.positions, estimatesBeforeSmoothing.orientations, estimatesBeforeSmoothing.covariances)):
         if i%skipPlt == 0:
             plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
             plot_cov_ellipse2d(ax[1], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
-    ax[1].plot(estimates.positions[:, 1], estimates.positions[:, 0], marker="x", label='XYPos', markevery=1)
+    ax[1].plot(estimatesBeforeSmoothing.positions[:, 1], estimatesBeforeSmoothing.positions[:, 0], color="C1", marker="x", label='XYPos', markevery=1)
     ax[1].legend()
     ax[1].set_ylabel("North [m]")
     ax[1].set_xlabel("West [m]")
     ax[1].set_xlim(*xlim)
     ax[1].set_ylim(*ylim)
+
+    ax[2].set_title("After Smoothing with Covariance")
+    for i, (position, orientation, cov) in enumerate(zip(estimatesAfterSmoothing.positions, estimatesAfterSmoothing.orientations, estimatesAfterSmoothing.covariances)):
+        if i%skipPlt == 0:
+            plot_cov = np.array(([[cov[1, 1], cov[1, 0]], [cov[0, 1], cov[0, 0]]]))
+            plot_cov_ellipse2d(ax[2], np.array([position[1], position[0]]), plot_cov, yaw = orientation[-1], edgecolor='r')
+    ax[2].plot(estimatesAfterSmoothing.positions[:, 1], estimatesAfterSmoothing.positions[:, 0], color='C2' ,marker="x", label='XYPos', markevery=1)
+    ax[2].legend()
+    ax[2].set_ylabel("North [m]")
+    ax[2].set_xlabel("West [m]")
+    ax[2].set_xlim(*xlim)
+    ax[2].set_ylim(*ylim)
     return fig
 
 def plotExtraStateEstimates(time, velocities, biases):
@@ -195,7 +210,7 @@ def plotMapWithTrajectory(positions, landmarks, view_init=[5, 170], xlim=[-1, 25
     fig = plt.figure(figsize=(10,10))
     ax = fig.add_subplot(projection="3d")
     ax.set_title("Estimated Map with Trajectory")
-    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], color="orange")
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], color="C2")
     ax.scatter(landmarks[:, 0], landmarks[:, 1], landmarks[:, 2])
     ax.set_xlim3d(*xlim)
     ax.set_ylim3d(*ylim)
@@ -234,23 +249,25 @@ def plotErrorsOverTime(estimatesBeforeSmoothing, estimatesAfterSmoothing, gts, m
     fig.suptitle(" Absolute Errors", fontsize=25)
 
     # Before smoothing
-    axs[0].plot(gts.times[matchesBeforeSmoothing], np.linalg.norm(estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing], ord=2, axis=1), label="Before Smoothing")
-    axs[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-    axs[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+    axs[0].plot(gts.times[matchesBeforeSmoothing], np.linalg.norm(estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing], ord=2, axis=1), color="C1", label="Before Smoothing")
+    if len(greyArea) > 0:
+        axs[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        axs[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[0].set_xlim([0, gts.times[-1]])
 
     axs[0].set_title("XY Position Error")
     axs[0].set_ylabel("Error [m]")
-    axs[1].plot(gts.times[matchesBeforeSmoothing], func(np.rad2deg(estimatesBeforeSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesBeforeSmoothing, -1])), label="Before Smoothing")
-    axs[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-    axs[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+    axs[1].plot(gts.times[matchesBeforeSmoothing], func(np.rad2deg(estimatesBeforeSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesBeforeSmoothing, -1])), color="C1", label="Before Smoothing")
+    if len(greyArea) > 0:
+        axs[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        axs[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     axs[1].set_xlim([0, gts.times[-1]])
     axs[1].set_ylabel("Error [deg]")
     axs[1].set_title("Heading Error")
 
     # After smoothing
-    axs[0].plot(gts.times[matchesAfterSmoothing], np.linalg.norm(estimatesAfterSmoothing.positions - gts.positions[matchesAfterSmoothing], ord=2, axis=1), label="After Smoothing")
-    axs[1].plot(gts.times[matchesAfterSmoothing], func(np.rad2deg(estimatesAfterSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesAfterSmoothing, -1])), label="After Smoothing")
+    axs[0].plot(gts.times[matchesAfterSmoothing], np.linalg.norm(estimatesAfterSmoothing.positions - gts.positions[matchesAfterSmoothing], ord=2, axis=1), color="C2", label="After Smoothing")
+    axs[1].plot(gts.times[matchesAfterSmoothing], func(np.rad2deg(estimatesAfterSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesAfterSmoothing, -1])), color="C2", label="After Smoothing")
     axs[0].legend()
     axs[1].legend()
 
@@ -262,39 +279,71 @@ def plotNEES(gts:PoseData, estimatesBeforeSmoothing:PoseData, estimatesAfterSmoo
     import scipy.stats
     confprob = 0.95
     CI2 = np.array(scipy.stats.chi2.interval(confprob, 2)).reshape((2,1))
+    CI1 = np.array(scipy.stats.chi2.interval(confprob, 1)).reshape((2,1))
     fig, ax = plt.subplots(1, 1, clear=True, figsize=(10,10), sharex=True)
     fig.suptitle("Planar NEES Over Time")
-    NEESBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
-    for i, (est_pos, est_cov) in enumerate(zip(estimatesBeforeSmoothing.positions, estimatesBeforeSmoothing.covariances)):
-        gt = gts.positions[matchesBeforeSmoothing[i]]
-        e = est_pos[:2] - gt[:2]
+    NEESPosBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
+    NEESYawBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
+    for i, (est_pos, est_ori, est_cov) in enumerate(zip(estimatesBeforeSmoothing.positions, estimatesBeforeSmoothing.orientations, estimatesBeforeSmoothing.covariances)):
+        gt_pos = gts.positions[matchesBeforeSmoothing[i]]
+        gt_ori = gts.orientations[matchesBeforeSmoothing[i]]
+        e_pos = est_pos[:2] - gt_pos[:2]
         cov = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
         P_inv = np.linalg.inv(cov)
-        NEESBeforeSmoothing[i] = e.T @ P_inv @ e
-    insideCI = np.mean((CI2[0] <= NEESBeforeSmoothing) * (NEESBeforeSmoothing <= CI2[1]))
-    ax.plot(estimatesBeforeSmoothing.times, NEESBeforeSmoothing, label="Before Smoothing")
+        NEESPosBeforeSmoothing[i] = e_pos.T @ P_inv @ e_pos
+        e_yaw = est_ori[-1] - gt_ori[-1]
+        cov_yaw = cov[-1,-1]
+        NEESYawBeforeSmoothing[i] = e_yaw*e_yaw / cov_yaw
+    insideCIPosBefore = np.mean((CI2[0] <= NEESPosBeforeSmoothing) * (NEESPosBeforeSmoothing <= CI2[1]))
+    insideCIYawBefore = np.mean((CI1[0] <= NEESYawBeforeSmoothing) * (NEESYawBeforeSmoothing <= CI1[1]))
+    ax.plot(estimatesBeforeSmoothing.times, NEESPosBeforeSmoothing, color="C1", label="Before Smoothing")
+    #ax[0].plot(estimatesBeforeSmoothing.times, NEESPosBeforeSmoothing, color="C1", label="Before Smoothing")
+    #ax[1].plot(estimatesBeforeSmoothing.times, NEESYawBeforeSmoothing, color="C1", label="Before Smoothing")
 
-    NEESAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
-    for i, (est_pos, est_cov) in enumerate(zip(estimatesAfterSmoothing.positions, estimatesAfterSmoothing.covariances)):
-        gt = gts.positions[matchesAfterSmoothing[i]]
-        e = est_pos[:2] - gt[:2]
+    NEESPosAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
+    NEESYawAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
+    for i, (est_pos, est_ori, est_cov) in enumerate(zip(estimatesAfterSmoothing.positions, estimatesAfterSmoothing.orientations, estimatesAfterSmoothing.covariances)):
+        gt_pos = gts.positions[matchesAfterSmoothing[i]]
+        gt_ori = gts.orientations[matchesAfterSmoothing[i]]
+        e = est_pos[:2] - gt_pos[:2]
         cov = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
         P_inv = np.linalg.inv(cov)
-        NEESAfterSmoothing[i] = e.T @ P_inv @ e
-    insideCIAfter = np.mean((CI2[0] <= NEESAfterSmoothing) * (NEESAfterSmoothing <= CI2[1]))
-    ax.set_title(f"Before Smoothing: ({insideCI*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIAfter*100:.1f} inside {100 * confprob} confidence interval)")
-    ax.plot(estimatesAfterSmoothing.times, NEESAfterSmoothing, label="After Smoothing")
-    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]))
-    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]))
-    ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-    ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        NEESPosAfterSmoothing[i] = e.T @ P_inv @ e
+        e_yaw = est_ori[-1] - gt_ori[-1]
+        cov_yaw = cov[-1,-1]
+        NEESYawAfterSmoothing[i] = e_yaw*e_yaw / cov_yaw
+    insideCIPosAfter = np.mean((CI2[0] <= NEESPosAfterSmoothing) * (NEESPosAfterSmoothing <= CI2[1]))
+    insideCIYawAfter = np.mean((CI1[0] <= NEESYawAfterSmoothing) * (NEESYawAfterSmoothing <= CI1[1]))
+    ax.set_title(f"Before Smoothing: ({insideCIPosBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIPosAfter*100:.1f} inside {100 * confprob} confidence interval)")
+    #ax[0].set_title(f"Before Smoothing: ({insideCIPosBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIPosAfter*100:.1f} inside {100 * confprob} confidence interval)")
+    #ax[1].set_title(f"Before Smoothing: ({insideCIYawBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIYawAfter*100:.1f} inside {100 * confprob} confidence interval)")
+    ax.plot(estimatesAfterSmoothing.times, NEESPosAfterSmoothing, color="C2", label="After Smoothing")
+    #ax[0].plot(estimatesAfterSmoothing.times, NEESPosAfterSmoothing, color="C2", label="After Smoothing")
+    #ax[1].plot(estimatesAfterSmoothing.times, NEESYawAfterSmoothing, color="C2", label="After Smoothing")
+    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    # ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    # ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    # ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    # ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    if len(greyArea) > 0:
+        ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        # ax[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        # ax[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        # ax[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        # ax[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
     ax.set_xlim([0, gts.times[-1]])
     ax.legend()
+    # ax[0].set_xlim([0, gts.times[-1]])
+    # ax[0].legend()
+    # ax[1].set_xlim([0, gts.times[-1]])
+    # ax[1].legend()
     return fig
     #print((estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing]) * estimatesBeforeSmoothing.covariances)
 
 
-def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 20]):
+def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 30]):
     gnss = mat2GNSSData(matfile)
     im = plt.imread(imfile)
     fig, ax = plt.subplots(figsize=(10,3)) #Looks better with this size
@@ -342,19 +391,20 @@ def plotIMUvsRealLinAcc(filename:str):
 
 def main():
     filepath = "../data/"
-    #filepath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/4/"
+    #filepath = "../data/recorded_runs/python_plots/Saved/newestSensorComparisons/lidar+imu+gnss/"
     matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
     estimates, gts = bag2numpy(f'simpleTunnel_big_loopClosure.bag')
-    #estimates, gts = bag2numpy(f'{filepath}simpleTunnel_big_loopClosure.bag')
+    #estimates, gts = bag2numpy(f'{filepath}simpleTunnel_straightPath_lidar+imu+gnss.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
-    run2TunnelStart = estimates.times[107]
-    run2TunnelEnd = estimates.times[175]
-    run1TunnelEnd = estimates.times[62]
-    run1TunnelStart = estimates.times[4]
-    greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
-    beforeSmoothingEstVsGt = plotTrajectory2D(estimates, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="Before Smoothing")
-    afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="After Smoothing")
+    #run2TunnelStart = estimates.times[107]
+    #run2TunnelEnd = estimates.times[175]
+    #run1TunnelEnd = estimates.times[62]
+    #run1TunnelStart = estimates.times[4]
+    #greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
+    greyArea=[]
+    SmoothingEstVsGt = plotTrajectory2D(estimates, estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 300], title="Estimated Position Vs True Position")
+    #afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="After Smoothing")
     est_to_gt_before_smoothing = np.zeros(estimates.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimates.times):
@@ -375,10 +425,7 @@ def main():
     if not os.path.isdir(figfolder):
         os.makedirs(figfolder)
     
-    beforeSmoothingEstVsGt.savefig(figfolder + "/beforeSmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight")
-    #beforeSmoothingXYWithCov.savefig(figfolder + "/beforeSmoothingXYWithCov.pdf", format='pdf', bbox_inches="tight")
-    afterSmoothingEstVsGt.savefig(figfolder + "/afterSmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight")
-    #afterSmoothingXYWithCov.savefig(figfolder + "/afterSmoothingXYWithCov.pdf", format='pdf', bbox_inches="tight")
+    SmoothingEstVsGt.savefig(figfolder + "/SmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight", dpi=1200)
     errorFig.savefig(figfolder + "/absolutePositionError.pdf", format='pdf', bbox_inches="tight")
     estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.pdf", format='pdf', bbox_inches="tight")
     NeesFig.savefig(figfolder + "/planarNEES.pdf", format='pdf', bbox_inches="tight")
@@ -386,16 +433,15 @@ def main():
         estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
         estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.pdf", format='pdf', bbox_inches="tight")
     
-    fig, ax = plt.subplots(2, 1, figsize=(10,10))
-    ax[0].plot(gts.times[est_to_gt_after_smoothing], gts.positions[est_to_gt_after_smoothing, 1] - estimatesAfterSmoothing.positions[:, 1], label="Y error")
-    ax[0].plot(estimatesAfterSmoothing.times, gts.positions[est_to_gt_after_smoothing, 0] - estimatesAfterSmoothing.positions[:, 0], label="X error after smoothing")
-    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 1] - estimates.positions[:, 1], label="Y error")
-    ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 0] - estimates.positions[:, 0], label="X error")
-    print(gts.times[est_to_gt_after_smoothing][-5:], estimatesAfterSmoothing.times[-5:])
-    #ax.plot(gts.times, gts.positions[:, 0], label="True")
-    #ax.plot(estimatesAfterSmoothing.times, estimatesAfterSmoothing.positions[:, 0], label="Estimated")
-    ax[0].legend()
-    ax[1].legend()
+    # fig, ax = plt.subplots(2, 1, figsize=(10,10))
+    # ax[0].plot(gts.times[est_to_gt_after_smoothing], gts.positions[est_to_gt_after_smoothing, 1] - estimatesAfterSmoothing.positions[:, 1], label="Y error")
+    # ax[0].plot(estimatesAfterSmoothing.times, gts.positions[est_to_gt_after_smoothing, 0] - estimatesAfterSmoothing.positions[:, 0], label="X error after smoothing")
+    # ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 1] - estimates.positions[:, 1], label="Y error")
+    # ax[1].plot(estimates.times, gts.positions[est_to_gt_before_smoothing, 0] - estimates.positions[:, 0], label="X error")
+    # #ax.plot(gts.times, gts.positions[:, 0], label="True")
+    # #ax.plot(estimatesAfterSmoothing.times, estimatesAfterSmoothing.positions[:, 0], label="Estimated")
+    # ax[0].legend()
+    # ax[1].legend()
 
     fig, ax = plt.subplots(1, 1, figsize=(10,10))
     ax.plot(gts.times, np.rad2deg(gts.orientations[:, 2]), label="True")
@@ -408,6 +454,6 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    #main()
-    matfile = "../data/april_2021/SimpleTunnel_BigLoop_WithTrueAccAndAngularRate.mat"
-    plotIMUvsRealLinAcc(matfile)
+    main()
+    #matfile = "../data/april_2021/SimpleTunnel_BigLoop_WithTrueAccAndAngularRate.mat"
+    #plotIMUvsRealLinAcc(matfile)
