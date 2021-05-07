@@ -83,7 +83,7 @@ class Graph
         ros::Time timer;
 
         // Optimization parameters
-        bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=false;
+        bool smoothingEnabledFlag=true, imuEnabledFlag=false, gnssEnabledFlag=false, loopClosureEnabledFlag=false;
         double voxelRes = 0.3;
         double keyFrameSaveDistance = 3;
         double minCorresponendencesStructure = 30;
