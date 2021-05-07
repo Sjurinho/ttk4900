@@ -335,14 +335,14 @@ void Graph::_mapToGraph(){
         gtsam::Pose3 pose = framePoses[cloudnr-startIdx];
         pcl::PointCloud<pointT> cloudInWorld;
         pcl::PointCloud<pointT> cloud = *cloudKeyFrames.at(cloudnr);
+        if (cloud.points.size() < 50)
+            continue;
         
         pcl::transformPointCloud(cloud, cloudInWorld, pose.matrix());
 
         pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
         matcher.setInputSource(cloudInWorld.makeShared());
         matcher.determineReciprocalCorrespondences(*allCorrespondences, 2); 
-        if (cloudInWorld.points.size() < 50)
-            continue;
         pcl::CorrespondencesPtr trimmedCorrespondences(new pcl::Correspondences);
         trimmer.setInputSource(cloudInWorld.makeShared());
         trimmer.setInputCorrespondences(allCorrespondences);
@@ -434,13 +434,15 @@ bool Graph::_detectLoopClosure()
     std::vector<int> pointSearchIndLoop;
     std::vector<float> pointSearchSqDisLoop;
     pcl::PointXYZ searchPoint = currentPosPoint;
-    searchPoint.x += 50*std::cos(currentPoseInWorld.rotation().yaw());
+    searchPoint.x += 70*std::cos(currentPoseInWorld.rotation().yaw());
+    searchPoint.y += 70*std::sin(currentPoseInWorld.rotation().yaw());
+    std::cout << "Looking for loop closures around: " << searchPoint << std::endl;
     kdtreeHistoryKeyPositions->setInputCloud(cloudKeyPositions);
     kdtreeHistoryKeyPositions->radiusSearch(searchPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
     closestHistoryFrameID = -1;
     for (int i = 0; i < pointSearchIndLoop.size(); ++i){
         int id = pointSearchIndLoop[i];
-        if (abs(timeKeyPosePairs[id].first - timeOdometry) > 15.0){
+        if (abs(timeKeyPosePairs[id].first - timeOdometry) > historyTimePassed){
             closestHistoryFrameID = id;
             break;
         }
@@ -466,6 +468,8 @@ bool Graph::_detectLoopClosure()
         pcl::transformPointCloud(*cloudKeyFrames[closestHistoryFrameID+j], cloud, FramePose.matrix());
         *nearHistoryKeyFrameCloud += cloud;
     }
+    if (nearHistoryKeyFrameCloud->points.size()<50)
+        return false;
     return true;
 }
 
@@ -479,6 +483,7 @@ bool Graph::_performLoopClosure()
         if (_detectLoopClosure()){
             std::cout << "Potential loop!" << std::endl;
             potentialLoopFlag = true;
+            std::cout << "Loop cloud: " << *nearHistoryKeyFrameCloud << std::endl;
         }
         if (!potentialLoopFlag){
             return false;
@@ -487,10 +492,11 @@ bool Graph::_performLoopClosure()
     potentialLoopFlag = false;
     pcl::IterativeClosestPoint<pointT, pointT> icp;
     icp.setMaxCorrespondenceDistance(100);
-    icp.setMaximumIterations(100);
+    //icp.setUseReciprocalCorrespondences(true);
+    icp.setMaximumIterations(200);
     icp.setTransformationEpsilon(1e-6);
     icp.setEuclideanFitnessEpsilon(1e-6);
-    icp.setRANSACIterations(10);
+    icp.setRANSACIterations(100);
     // Align clouds
     icp.setInputSource(latestKeyFrameCloud);
     icp.setInputTarget(nearHistoryKeyFrameCloud);
@@ -525,7 +531,7 @@ bool Graph::_performLoopClosure()
     _fromPointXYZRPYToPose3(cloudKeyPoses->points[closestHistoryFrameID], poseTo);
     gtsam::Vector6 Vector6(6);
     float noiseScore = icp.getFitnessScore();
-    Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore, noiseScore; // rad, rad, rad, m, m, m
+    Vector6 << noiseScore/10, noiseScore/10, noiseScore/10, noiseScore, noiseScore, noiseScore; // rad, rad, rad, m, m, m
     //Vector6 << 0.3, 0.3, 0.01, 0.1, 0.1, 0.05;
     constraintNoise = gtsam::noiseModel::Diagonal::Variances(Vector6);
 
@@ -626,7 +632,6 @@ void Graph::_cloud2Map(){
 
     if (cloudKeyFrames.size() < 1 || currentFeatureCloud->empty()) return;
 
-
     pcl::CorrespondencesPtr allCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceEstimation<pointT, pointT> matcher;
     pcl::CorrespondencesPtr partialOverlapCorrespondences(new pcl::Correspondences);
@@ -636,7 +641,6 @@ void Graph::_cloud2Map(){
     matcher.setInputTarget(cloudMapRefined);
     pcl::PointCloud<pointT> framePoints = *currentFeatureCloud;
     pcl::PointCloud<pointT> frameInWorld;
-
     int iter = 0;
     double lambda = 1e-4;
     for (iter = 0; iter<maxIterSmoothing; iter++){
@@ -675,7 +679,6 @@ void Graph::_cloud2Map(){
             pointT pointInWorld = frameInWorld.at(sourceIndex);
             pointT pointInLocalFrame = framePoints.at(sourceIndex);
             pointT matchedPointMap = cloudMapRefined->at(targetIndex);
-            //#TODO: Extract points first, then do optimization?
 
             // Extract points
             auto q_wj = gtsam::Point3(matchedPointMap.x, matchedPointMap.y, matchedPointMap.z);
@@ -885,8 +888,6 @@ void Graph::runOnce(int &runsWithoutUpdate)
         imuComparisonTimerPtr = &(gnssMeasurement.first);
         if(updateImu){
             predImuState = preintegrated->predict(prevImuState, prevImuBias);
-            std::cout << "Previous IMU: " << prevImuState << std::endl;
-            std::cout << "Predicted IMU: " << predImuState << std::endl;
             currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
             currentPoseInWorld = predImuState.pose();
             _performIsamTimedOut();
@@ -900,11 +901,13 @@ void Graph::runOnce(int &runsWithoutUpdate)
         }
         mtx.unlock();
     }
-    else if (imuMeasurements.size() > 0 && *imuComparisonTimerPtr + 1.5 < imuMeasurements.back().first || onlyImu){
+    else if (imuMeasurements.size() > 0 && *imuComparisonTimerPtr + 1.7 < imuMeasurements.back().first || onlyImu){
         mtx.lock();
         reinitialize=true;
         onlyImu=true;
-        //_preProcessIMU();
+        imuComparisonTimerPtr = &(imuMeasurements.back().first);
+        _preProcessIMU();
+
         if (updateImu){
             predImuState = preintegrated->predict(prevImuState, prevImuBias);
             currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
@@ -1019,7 +1022,7 @@ void Graph::_performIsamTimedOut(){
 }
 
 void Graph::_preProcessIMU(){
-    int measurements = imuMeasurements.size();
+    int measurements = imuMeasurements.size()-1;
     int i = 0;
     for (auto it = imuMeasurements.begin(); it != imuMeasurements.end(); it++){
         std::pair<double, gtsam::Vector6> measurementWithStamp = *it;
@@ -1041,9 +1044,10 @@ void Graph::_preProcessIMU(){
 
 void Graph::_postProcessIMU(){
     if(updateImu){
+
         predImuState = preintegrated->predict(prevImuState, prevImuBias);
 
-        currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
+        //currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
         /*
         Lowpassfilter trial
         auto currentPoseOnManifold = gtsam::Pose3::Logmap(currentPoseInWorld);
@@ -1065,7 +1069,6 @@ void Graph::runRefine()
     ros::Rate rate(1);
     while (ros::ok()){
         _mapToGraph();
-        //_investigateLoopClosures()
         mtx.lock();
         cloudMapRefined->clear();
         for (auto key : mapKeys){

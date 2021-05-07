@@ -30,3 +30,10 @@
 
 ## Note to self: Mandag 26.04
 - Fikse gamle plots og tune til det siste datasettet (SimpleTunnel_BigLoop_5Hz.bag). Etterforsk hvorfor den estimerer feil på siste GNSS måling
+
+## Møte 06.05.2021 - Semcon
+- Plot med andre states, estimate vs ground truth
+- Sammenligningsplots i diskusjonsdelen?
+    - For eksempel at i diskusjonsdelen så er estvsgt for alle plottet i samme
+- Hvilket eksperiment det er enten i caption eller i title
+- Eget avsnitt på hvordan tolke og bruke NEES.
