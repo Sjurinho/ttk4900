@@ -277,70 +277,115 @@ def plotErrorsOverTime(estimatesBeforeSmoothing, estimatesAfterSmoothing, gts, m
 
 def plotNEES(gts:PoseData, estimatesBeforeSmoothing:PoseData, estimatesAfterSmoothing:PoseData, matchesBeforeSmoothing, matchesAfterSmoothing, greyArea=[]):
     import scipy.stats
+
+    def angleError(alpha, beta):
+        phi = np.abs(beta-alpha) % (2*np.pi)
+        distance = 2*np.pi-phi if phi > np.pi else phi
+        return distance
+
     confprob = 0.95
+    CI3 = np.array(scipy.stats.chi2.interval(confprob, 3)).reshape((2,1))
     CI2 = np.array(scipy.stats.chi2.interval(confprob, 2)).reshape((2,1))
     CI1 = np.array(scipy.stats.chi2.interval(confprob, 1)).reshape((2,1))
-    fig, ax = plt.subplots(1, 1, clear=True, figsize=(10,10), sharex=True)
-    fig.suptitle("Planar NEES Over Time")
+    fig, ax = plt.subplots(3, 1, clear=True, figsize=(10,10), sharex=True)
+    #fig.suptitle("Planar NEES Over Time")
+    NEESTotalBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
     NEESPosBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
     NEESYawBeforeSmoothing = np.zeros(estimatesBeforeSmoothing.positions.shape[0])
     for i, (est_pos, est_ori, est_cov) in enumerate(zip(estimatesBeforeSmoothing.positions, estimatesBeforeSmoothing.orientations, estimatesBeforeSmoothing.covariances)):
         gt_pos = gts.positions[matchesBeforeSmoothing[i]]
         gt_ori = gts.orientations[matchesBeforeSmoothing[i]]
+
+        # XY
         e_pos = est_pos[:2] - gt_pos[:2]
-        cov = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
-        P_inv = np.linalg.inv(cov)
+        P = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
+        P_inv = np.linalg.inv(P)
         NEESPosBeforeSmoothing[i] = e_pos.T @ P_inv @ e_pos
-        e_yaw = est_ori[-1] - gt_ori[-1]
-        cov_yaw = cov[-1,-1]
+
+        # Yaw
+        e_yaw = angleError(est_ori[-1], gt_ori[-1])
+        cov_yaw = est_cov[-1,-1]
         NEESYawBeforeSmoothing[i] = e_yaw*e_yaw / cov_yaw
+
+        #Total
+        P = np.array(([[est_cov[1,1], est_cov[1, 0], est_cov[1, -1]], [est_cov[0, 1], est_cov[0, 0], est_cov[0, -1]], [est_cov[-1, 1], est_cov[-1, 0], est_cov[-1, -1]]]))
+        P_inv = np.linalg.inv(P)
+        e_total = np.array([*e_pos, e_yaw])
+        NEESTotalBeforeSmoothing[i] = e_total.T @ P_inv @ e_total
+
     insideCIPosBefore = np.mean((CI2[0] <= NEESPosBeforeSmoothing) * (NEESPosBeforeSmoothing <= CI2[1]))
     insideCIYawBefore = np.mean((CI1[0] <= NEESYawBeforeSmoothing) * (NEESYawBeforeSmoothing <= CI1[1]))
-    ax.plot(estimatesBeforeSmoothing.times, NEESPosBeforeSmoothing, color="C1", label="Before Smoothing")
-    #ax[0].plot(estimatesBeforeSmoothing.times, NEESPosBeforeSmoothing, color="C1", label="Before Smoothing")
-    #ax[1].plot(estimatesBeforeSmoothing.times, NEESYawBeforeSmoothing, color="C1", label="Before Smoothing")
+    insideCITotalBefore = np.mean((CI3[0] <= NEESTotalBeforeSmoothing) * (NEESTotalBeforeSmoothing <= CI3[1]))
+    ax[0].plot(estimatesBeforeSmoothing.times, NEESPosBeforeSmoothing, color="C1", label="Before Smoothing")
+    ax[1].plot(estimatesBeforeSmoothing.times, NEESYawBeforeSmoothing, color="C1", label="Before Smoothing")
+    ax[2].plot(estimatesBeforeSmoothing.times, NEESTotalBeforeSmoothing, color="C1", label="Before Smoothing")
 
+    NEESTotalAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
     NEESPosAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
     NEESYawAfterSmoothing = np.zeros(estimatesAfterSmoothing.positions.shape[0])
     for i, (est_pos, est_ori, est_cov) in enumerate(zip(estimatesAfterSmoothing.positions, estimatesAfterSmoothing.orientations, estimatesAfterSmoothing.covariances)):
         gt_pos = gts.positions[matchesAfterSmoothing[i]]
         gt_ori = gts.orientations[matchesAfterSmoothing[i]]
-        e = est_pos[:2] - gt_pos[:2]
-        cov = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
-        P_inv = np.linalg.inv(cov)
-        NEESPosAfterSmoothing[i] = e.T @ P_inv @ e
-        e_yaw = est_ori[-1] - gt_ori[-1]
-        cov_yaw = cov[-1,-1]
+
+        # XY
+        e_pos = est_pos[:2] - gt_pos[:2]
+        P = np.array(([[est_cov[1, 1], est_cov[1, 0]], [est_cov[0, 1], est_cov[0, 0]]]))
+        P_inv = np.linalg.inv(P)
+        NEESPosAfterSmoothing[i] = e_pos.T @ P_inv @ e_pos
+
+        # Yaw
+        e_yaw = angleError(est_ori[-1], gt_ori[-1])
+        cov_yaw = est_cov[-1,-1]
         NEESYawAfterSmoothing[i] = e_yaw*e_yaw / cov_yaw
+        #print(e_yaw)
+
+        # Total
+        P = np.array(([[est_cov[1,1], est_cov[1, 0], est_cov[1, -1]], [est_cov[0, 1], est_cov[0, 0], est_cov[0, -1]], [est_cov[-1, 1], est_cov[-1, 0], est_cov[-1, -1]]]))
+        P_inv = np.linalg.inv(P)
+        e_total = np.array([*e_pos, e_yaw])
+        NEESTotalAfterSmoothing[i] = e_total.T @ P_inv @ e_total
+
+
     insideCIPosAfter = np.mean((CI2[0] <= NEESPosAfterSmoothing) * (NEESPosAfterSmoothing <= CI2[1]))
     insideCIYawAfter = np.mean((CI1[0] <= NEESYawAfterSmoothing) * (NEESYawAfterSmoothing <= CI1[1]))
-    ax.set_title(f"Before Smoothing: ({insideCIPosBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIPosAfter*100:.1f} inside {100 * confprob} confidence interval)")
-    #ax[0].set_title(f"Before Smoothing: ({insideCIPosBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIPosAfter*100:.1f} inside {100 * confprob} confidence interval)")
-    #ax[1].set_title(f"Before Smoothing: ({insideCIYawBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIYawAfter*100:.1f} inside {100 * confprob} confidence interval)")
-    ax.plot(estimatesAfterSmoothing.times, NEESPosAfterSmoothing, color="C2", label="After Smoothing")
-    #ax[0].plot(estimatesAfterSmoothing.times, NEESPosAfterSmoothing, color="C2", label="After Smoothing")
-    #ax[1].plot(estimatesAfterSmoothing.times, NEESYawAfterSmoothing, color="C2", label="After Smoothing")
-    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
-    ax.plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
-    # ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
-    # ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
-    # ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
-    # ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    insideCITotalAfter = np.mean((CI3[0] <= NEESTotalAfterSmoothing) * (NEESTotalAfterSmoothing <= CI3[1]))
+
+
+    ax[0].set_title(f"XY Position NEES\nBefore Smoothing: ({insideCIPosBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIPosAfter*100:.1f} inside {100 * confprob} confidence interval)")
+    ax[1].set_title(f"Heading NEES\nBefore Smoothing: ({insideCIYawBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCIYawAfter*100:.1f} inside {100 * confprob} confidence interval)")
+    ax[2].set_title(f"Total Planar NEES\nBefore Smoothing: ({insideCITotalBefore*100:.1f} inside {100 * confprob} confidence interval)\nAfter Smoothing: ({insideCITotalAfter*100:.1f} inside {100 * confprob} confidence interval)")
+
+
+    ax[0].plot(estimatesAfterSmoothing.times, NEESPosAfterSmoothing, color="C2", label="After Smoothing")
+    ax[1].plot(estimatesAfterSmoothing.times, NEESYawAfterSmoothing, color="C2", label="After Smoothing")
+    ax[2].plot(estimatesAfterSmoothing.times, NEESTotalAfterSmoothing, color="C2", label="After Smoothing")
+
+
+    ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    ax[0].plot(estimatesAfterSmoothing.times, np.repeat(CI2[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    ax[1].plot(estimatesAfterSmoothing.times, np.repeat(CI1[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
+    ax[2].plot(estimatesAfterSmoothing.times, np.repeat(CI3[0], estimatesAfterSmoothing.times.shape[0]), color="C3", label="Lower Bound")
+    ax[2].plot(estimatesAfterSmoothing.times, np.repeat(CI3[1], estimatesAfterSmoothing.times.shape[0]), color="C4", label="Upper Bound")
     if len(greyArea) > 0:
-        ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-        ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
-        # ax[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-        # ax[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
-        # ax[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
-        # ax[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
-    ax.set_xlim([0, gts.times[-1]])
-    ax.legend()
-    # ax[0].set_xlim([0, gts.times[-1]])
-    # ax[0].legend()
-    # ax[1].set_xlim([0, gts.times[-1]])
-    # ax[1].legend()
+        #ax.axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        #ax.axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        ax[0].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        ax[0].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        ax[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        ax[1].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+        ax[2].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
+        ax[2].axvspan(greyArea[2], greyArea[3], facecolor='grey', alpha=0.3)
+    #ax.set_xlim([0, gts.times[-1]])
+    #ax.legend()
+    ax[0].set_xlim([0, gts.times[-1]])
+    ax[0].legend(loc='upper left')
+    ax[1].set_xlim([0, gts.times[-1]])
+    ax[1].legend(loc='upper left')
+    ax[2].set_xlim([0, gts.times[-1]])
+    ax[2].legend(loc='upper left')
+    fig.tight_layout(pad=3.0)
     return fig
-    #print((estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing]) * estimatesBeforeSmoothing.covariances)
 
 
 def plotExperiment(gts, imfile, matfile, imExtent=[-100, 450, -20, 30]):
@@ -425,13 +470,34 @@ def main():
     if not os.path.isdir(figfolder):
         os.makedirs(figfolder)
     
-    SmoothingEstVsGt.savefig(figfolder + "/SmoothingEstVsGt.pdf", format='pdf', bbox_inches="tight", dpi=1200)
-    errorFig.savefig(figfolder + "/absolutePositionError.pdf", format='pdf', bbox_inches="tight")
-    estimatedMapWithTrajectory.savefig(figfolder + "/estimatedMapWithTrajectory.pdf", format='pdf', bbox_inches="tight")
-    NeesFig.savefig(figfolder + "/planarNEES.pdf", format='pdf', bbox_inches="tight")
+    saveConfig = {
+        "format":"pdf", 
+        "bbox_inches":"tight", 
+        "dpi":1200
+        }
+
+    SmoothingEstVsGt.savefig(
+        figfolder + "/SmoothingEstVsGt.pdf", 
+        **saveConfig
+        )
+    errorFig.savefig(
+        figfolder + "/absolutePositionError.pdf",
+        **saveConfig
+        )
+    estimatedMapWithTrajectory.savefig(
+        figfolder + "/estimatedMapWithTrajectory.pdf",
+        **saveConfig
+        )
+    NeesFig.savefig(
+        figfolder + "/planarNEES.pdf",
+        **saveConfig
+        )
     if len(velocities) > 0:
         estimatedExtraStateEstimates = plotExtraStateEstimates(estimatesAfterSmoothing.times, velocities, biases)
-        estimatedExtraStateEstimates.savefig(figfolder + "/estimatedExtraStateEstimates.pdf", format='pdf', bbox_inches="tight")
+        estimatedExtraStateEstimates.savefig(
+            figfolder + "/estimatedExtraStateEstimates.pdf",
+            **saveConfig 
+            )
     
     # fig, ax = plt.subplots(2, 1, figsize=(10,10))
     # ax[0].plot(gts.times[est_to_gt_after_smoothing], gts.positions[est_to_gt_after_smoothing, 1] - estimatesAfterSmoothing.positions[:, 1], label="Y error")
@@ -443,14 +509,17 @@ def main():
     # ax[0].legend()
     # ax[1].legend()
 
-    fig, ax = plt.subplots(1, 1, figsize=(10,10))
-    ax.plot(gts.times, np.rad2deg(gts.orientations[:, 2]), label="True")
-    ax.plot(estimates.times, np.rad2deg(estimates.orientations[:, 2]), label="Estimate")
-    ax.legend()
+    # fig, ax = plt.subplots(1, 1, figsize=(10,10))
+    # ax.plot(gts.times, np.rad2deg(gts.orientations[:, 2]), label="True")
+    # ax.plot(estimates.times, np.rad2deg(estimates.orientations[:, 2]), label="Estimate")
+    # ax.legend()
 
-    imExtent = [-100, 350, 20, -30]
+    imExtent = [-100, 350, 30, -20]
     experimentFig = plotExperiment(gts, imfile, matfile, imExtent=imExtent)
-    experimentFig.savefig(figfolder + "/experiment.pdf", format='pdf', bbox_inches="tight")
+    experimentFig.savefig(
+        figfolder + "/experiment.pdf",
+        **saveConfig
+        )
     plt.show()
 
 if __name__ == "__main__":

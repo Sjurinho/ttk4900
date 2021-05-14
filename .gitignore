@@ -299,7 +299,9 @@ TSWLatexianTemp*
 /data/**
 !data/usage.txt
 !data/recorded_runs/
-!data/recorded_runs/python_plots
+!data/recorded_runs/python_plots/
+!data/recorded_runs/python_plots/comparisons/
+!data/recorded_runs/python_plots/comparisons/**
 !data/recorded_runs/python_plots/Saved/
 !data/recorded_runs/python_plots/Saved/newestSensorComparisons/
 !data/recorded_runs/python_plots/Saved/newestSensorComparisons/**
