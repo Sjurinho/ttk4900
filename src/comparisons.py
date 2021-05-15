@@ -13,9 +13,13 @@ import matplotlib as mpl
 mpl.style.use('seaborn')
 plt.rcParams["lines.markeredgewidth"] = 0.5
 
-basePath = "../data/recorded_runs/python_plots/Saved/newestSensorComparisons"
+#basePath = "../data/recorded_runs/python_plots/Saved/newestSensorComparisons"
+basePath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure"
 
-folders = [f"{basePath}/lidar", f"{basePath}/lidar+imu", f"{basePath}/lidar+imu+gnss"]
+#folders = [f"{basePath}/lidar", f"{basePath}/lidar+imu", f"{basePath}/lidar+imu+gnss"]
+#bagfiles = [folder+"/rawEstimates.bag" for folder in folders]
+#csvfiles = [folder+"/LatestRun.csv" for folder in folders]
+folders = [f"{basePath}/5"]
 bagfiles = [folder+"/rawEstimates.bag" for folder in folders]
 csvfiles = [folder+"/LatestRun.csv" for folder in folders]
 print(bagfiles, csvfiles)
@@ -127,10 +131,10 @@ for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothin
         P = np.array(([[est_cov[1,1], est_cov[1, 0], est_cov[1, -1]], [est_cov[0, 1], est_cov[0, 0], est_cov[0, -1]], [est_cov[-1, 1], est_cov[-1, 0], est_cov[-1, -1]]]))
         P_inv = np.linalg.inv(P)
         e_total = np.array([*e_pos, e_yaw])
-        NEESTotalBeforeSmoothing[i] = e_total.T @ P_inv @ e_total
+        NEESTotalBeforeSmoothing[k] = e_total.T @ P_inv @ e_total
 
         errors_pos[k] = e_pos
-        errors_ori[i] = e_yaw
+        errors_ori[k] = e_yaw
 
     ANEESesBS_pos.append(np.mean(NEESPosBeforeSmoothing))
     ANEESesBS_ori.append(np.mean(NEESYawBeforeSmoothing))
@@ -173,7 +177,7 @@ for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothin
         NEESTotalAfterSmoothing[k] = e_total.T @ P_inv @ e_total
 
         errors_pos[k] = e_pos
-        errors_ori[i] = e_yaw
+        errors_ori[k] = e_yaw
 
     ANEESesAS_pos.append(np.mean(NEESPosAfterSmoothing))
     ANEESesAS_ori.append(np.mean(NEESYawAfterSmoothing))
