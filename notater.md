@@ -37,3 +37,23 @@
     - For eksempel at i diskusjonsdelen så er estvsgt for alle plottet i samme
 - Hvilket eksperiment det er enten i caption eller i title
 - Eget avsnitt på hvordan tolke og bruke NEES.
+
+## Plan for providing submittable draft by Monday 31.10
+- Tuesday: Finished fill-in on results and on experimental work
+- Wednesday: Finished related work
+- Thursday and friday: Finish discussion and conclusion
+- Saturday: Finish abstract
+- Sunday: "Korrektur"
+
+## Møte 27.05.2021
+- Natbib
+- Motivasjon hopper litt tidlig inn i teorien
+- Prøve å binde opp mot det faktiske usecasen.
+- Flytte mye av introduksjon/motivasjonen til related work. 
+- Fokusere motivasjonen mot industri isteden. Ut mot application istedenfor.
+- Finnes ikke noe dataset i tunnel etter min kunnskap
+
+# Møte 04.06.2021
+- Github link i proposed_system
+- Appendix A - hyperparametere
+- Appendix B - ROS Graph

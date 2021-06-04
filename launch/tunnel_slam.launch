@@ -3,11 +3,6 @@
 
 <launch>
     <!-- Defining the node and executable and publishing the output on terminal-->
-    <node name="tunnel_slam_node" pkg="tunnel_slam" type="tunnel_slam_node" output="screen">
-        <!-- loading the parameters from yaml file during th runtime -->
-        <rosparam command="load" file="$(find tunnel_slam)/config/tunnel_slam.yaml"/>
-    </node>
-    
     <node name="feature_association_node" pkg="tunnel_slam" type="feature_association_node" output="screen" />
 
     <node name="graph_node" pkg="tunnel_slam" type="graph_node" output="screen" />

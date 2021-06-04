@@ -39,9 +39,9 @@ FeatureAssociation::FeatureAssociation(ros::NodeHandle &nh, ros::NodeHandle &pnh
     pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
     // Subscribers and publishers
     subPointCloud2          = nh.subscribe<sensor_msgs::PointCloud2>("/points2", 32, &FeatureAssociation::pointCloud2Handler, this);
-    pubGroundPlaneCloud2    = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32);
-    pubFeatureCloud2        = nh.advertise<sensor_msgs::PointCloud2>("/featurePointCloud", 32);
-    pubOdometry             = nh.advertise<nav_msgs::Odometry>("/lidarOdom", 32);
+    pubGroundPlaneCloud2    = nh.advertise<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 1000);
+    pubFeatureCloud2        = nh.advertise<sensor_msgs::PointCloud2>("/featurePointCloud", 1000);
+    pubOdometry             = nh.advertise<nav_msgs::Odometry>("/lidarOdom", 1000);
 
     // Variable initialization
     prevTime = ros::Time::now();
@@ -86,8 +86,6 @@ void FeatureAssociation::_findGroundPlane(const pcl::PointCloud<pcl::PointNormal
     pcl::ModelCoefficients coefficients;
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices());
     sacGroundPlane.segment(*inliers, coefficients);
-    
-    // #TODO: Extract ground plane indices relative to original cloud and output ground plane 
 
     groundPlane = pcl::PointCloud<pcl::PointNormal>(*potentialGroundPoints, inliers->indices);
     
@@ -109,7 +107,7 @@ void FeatureAssociation::_extractFeatures(const pcl::PointCloud<pcl::PointNormal
     keypointDetector.setNonMaxRadius(leafSize*3);
     keypointDetector.setThreshold21(0.8);
     keypointDetector.setThreshold32(0.8);
-    keypointDetector.setNormalRadius(normalRadius); //#TODO: find a way to use precalculated normals
+    keypointDetector.setNormalRadius(normalRadius);
     //keypointDetector.setNormals(test->);
     keypointDetector.compute(output);
 
@@ -157,12 +155,6 @@ pcl::RangeImage FeatureAssociation::_pointCloud2RangeImage(const pcl::PointCloud
 
 }
 
-void FeatureAssociation::_warpPoints() //#TODO
-{
-    double timeDiff = currentTime.toSec() - prevTime.toSec();
-    double zPrev = transformation.rotation().eulerAngles(0, 1, 2).z();
-}
-
 void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud, const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors)
 {   
     
@@ -195,30 +187,46 @@ void FeatureAssociation::_calculateTransformation(const pcl::PointCloud<pcl::Poi
     rej.getCorrespondences(*goodCorrespondences);
 
     //Calculate transformation
-    //pcl::registration::TransformationEstimationPointToPlane<pcl::PointNormal, pcl::PointNormal> tEst;
-    pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal> tEst;
-    //pcl::IterativeClosestPointNonLinear<pcl::PointNormal, pcl::PointNormal> tEst;
-    //pcl::registration::TransformationEstimationLM<pcl::PointNormal, pcl::PointNormal> tEst;
-    Eigen::Matrix4f T;
-    /*tEst.setInputSource(featureCloud.makeShared());
-    tEst.setInputTarget(_prevFeatureCloud.makeShared());
-    goodCorrespondences->*/
 
+    pcl::registration::TransformationEstimation2D<pcl::PointNormal, pcl::PointNormal> tEst;
+    Eigen::Matrix4f T;
 
     tEst.estimateRigidTransformation(featureCloud, _prevFeatureCloud, *goodCorrespondences, T);
 
-    /*Eigen::Matrix4f TFinal;
-    pcl::PointCloud<pcl::PointNormal> alignedCloud;
-    pcl::GeneralizedIterativeClosestPoint<pcl::PointNormal, pcl::PointNormal> gicp;
-    gicp.setInputSource(featureCloud.makeShared());
-    gicp.setInputTarget(_prevFeatureCloud.makeShared());
-    gicp.align(alignedCloud, T);
-    TFinal = gicp.getFinalTransformation();*/
+    // Estimate of uncertainty (#TODO)
+    double dist2_x, dist2_y, dist2_z, ang_yaw, ang_pitch, ang_roll = 0;
+    double q1, q2, q3 = 0;
 
+    pcl::PointCloud<pcl::PointNormal> source;
+    pcl::transformPointCloud(featureCloud, source, T);
+    for (int i = 0; i<goodCorrespondences->size(); i++){
+        auto correspondence = goodCorrespondences->at(i);
+        double x_s = source.at(correspondence.index_query).x;
+        double x_t = _prevFeatureCloud.at(correspondence.index_match).x;
+        double dist_x = x_s - x_t;
 
+        double y_s = source.at(correspondence.index_query).y;
+        double y_t = _prevFeatureCloud.at(correspondence.index_match).y;
+        double dist_y = y_s - y_t;
 
-    //TFinal = T;
-    //Eigen::Affine3f t; t = T;
+        double z_s = source.at(correspondence.index_query).z;
+        double z_t = _prevFeatureCloud.at(correspondence.index_match).z;
+        double dist_z = z_s - z_t;
+
+        dist2_x += pow(dist_x, 2);
+        dist2_y += pow(dist_y, 2);
+        dist2_z += pow(dist_z, 2);
+        ang_yaw += atan2(dist_x, dist_z);
+        ang_pitch += atan2(sqrt(pow(dist_x, 2) + pow(dist_z, 2)), dist_y);
+        //pcl::getAngle3D()
+    }
+    sigma2_x = sqrt(dist2_x/goodCorrespondences->size());
+    sigma2_y = sqrt(dist2_y/goodCorrespondences->size());
+    sigma2_z = sqrt(dist2_z/goodCorrespondences->size());
+    sigma_yaw = pow((2*M_PI/180),2); //q3/goodCorrespondences->size()
+    sigma_roll = pow((15*M_PI/180),2);
+    sigma_pitch = pow((15*M_PI/180),2);
+    
     transformation = T.cast<double>();
 }
 
@@ -235,7 +243,7 @@ void FeatureAssociation::_publishTransformation()
             return;
         
         // Unstable
-        if (abs(delta_x) > 4 || abs(delta_y) > 2 || abs(delta_z) > 2){
+        if (abs(delta_x) > 5 || abs(delta_y) > 3 || abs(delta_z) > 2){
             return;
         }
 
@@ -255,6 +263,13 @@ void FeatureAssociation::_publishTransformation()
         odom.pose.pose.position.z   = delta_z;
         odom.pose.pose.orientation  = tfMsg.transform.rotation;
 
+        odom.pose.covariance.at(0) = sigma2_x;
+        odom.pose.covariance.at(5) = sigma2_y;
+        odom.pose.covariance.at(11) = sigma2_z;
+
+        odom.pose.covariance.at(17) = sigma_roll;
+        odom.pose.covariance.at(23) = sigma_pitch;
+        odom.pose.covariance.at(29) = sigma_yaw;
         odom.child_frame_id = "map";
 
         pubOdometry.publish(odom);
@@ -352,6 +367,9 @@ void FeatureAssociation::runOnce()
         //std::cout << "FEATURES DESCRIPTORS\n" << featureDescriptors << std::endl;
         if (featureDescriptors.points.size() < minNrOfFeatures){
             // Perhaps empty prev
+            _prevFeatureCloud = pcl::PointCloud<pcl::PointNormal>();
+            _prevFeatureDescriptor = pcl::PointCloud<pcl::FPFHSignature33>();
+            _prevGroundPlaneCloud = pcl::PointCloud<pcl::PointNormal>();
             return;
         }
         if (_prevFeatureCloud.empty() || _prevFeatureDescriptor.empty() || _prevGroundPlaneCloud.empty()) {

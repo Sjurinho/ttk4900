@@ -16,14 +16,17 @@ plt.rcParams["lines.markeredgewidth"] = 0.5
 #basePath = "../data/recorded_runs/python_plots/Saved/newestSensorComparisons"
 basePath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure"
 
+experiment = basePath.split("/")[-1]
+
 #folders = [f"{basePath}/lidar", f"{basePath}/lidar+imu", f"{basePath}/lidar+imu+gnss"]
 #bagfiles = [folder+"/rawEstimates.bag" for folder in folders]
 #csvfiles = [folder+"/LatestRun.csv" for folder in folders]
-folders = [f"{basePath}/5"]
+folders = [f"{basePath}/noLoopClosure", f"{basePath}/11"]
 bagfiles = [folder+"/rawEstimates.bag" for folder in folders]
 csvfiles = [folder+"/LatestRun.csv" for folder in folders]
 print(bagfiles, csvfiles)
-
+#labels = ["LiDAR", "LiDAR+IMU", "LiDAR+IMU+GNSS"]
+labels = ["Without Loop Closure", "With Loop Closure"]
 def angleError(alpha, beta):
     phi = np.abs(beta-alpha) % 360
     distance = 360-phi if phi > 180 else phi
@@ -37,29 +40,32 @@ estimatesBS = []
 estimatesAS = []
 matchesBS = []
 matchesAS = []
-gts = None
+gt_list = []
 for (bagfile, csvfile) in zip(bagfiles, csvfiles):
     estimatesBeforeSmoothing, gts = bag2numpy(bagfile)
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(csvfile, estimatesBeforeSmoothing)
+    gt_list.append(gts)
     estimatesBS.append(estimatesBeforeSmoothing)
     estimatesAS.append(estimatesAfterSmoothing)
     est_to_gt_before_smoothing = np.zeros(estimatesBeforeSmoothing.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimatesBeforeSmoothing.times):
         est_to_gt_before_smoothing[i] = np.argmax(gts.times > est_t)
+        if est_to_gt_before_smoothing[i] == 0 and i != 0:
+            est_to_gt_before_smoothing[i] = -1
     
     est_to_gt_after_smoothing = np.zeros(estimatesAfterSmoothing.times.shape, dtype=np.int)
 
     for i, est_t in enumerate(estimatesAfterSmoothing.times):
         est_to_gt_after_smoothing[i] = np.argmax(gts.times > est_t)
-    
+        if est_to_gt_after_smoothing[i] == 0 and i != 0:
+            est_to_gt_after_smoothing[i] = -1
     matchesBS.append(est_to_gt_before_smoothing)
     matchesAS.append(est_to_gt_after_smoothing)
 
 greyArea = []
-labels = ["LiDAR", "LiDAR+IMU", "LiDAR+IMU+GNSS"]
 func = np.vectorize(angleError)
-figErrors, axsErrors = plt.subplots(2, 1, clear=True, figsize=(10,10), sharex=True)
+figErrors, axsErrors = plt.subplots(4, 1, clear=True, figsize=(10,10), sharex=True)
 figErrors.suptitle(" Absolute Errors", fontsize=25)
 confprob = 0.95
 CI3 = np.array(scipy.stats.chi2.interval(confprob, 3)).reshape((2,1))
@@ -80,7 +86,8 @@ RMSEAS_y = []
 ANEESesAS_pos = []
 ANEESesAS_ori = []
 ANEESesAS_total = []
-for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothing, matchesAfterSmoothing) in enumerate(zip(estimatesBS, estimatesAS, matchesBS, matchesAS)):
+print(len(matchesBS))
+for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothing, matchesAfterSmoothing, gts) in enumerate(zip(estimatesBS, estimatesAS, matchesBS, matchesAS, gt_list)):
     # Before smoothing
     axsErrors[0].plot(gts.times[matchesBeforeSmoothing], np.linalg.norm(estimatesBeforeSmoothing.positions - gts.positions[matchesBeforeSmoothing], ord=2, axis=1), color="C"+str(i), label=labels[i] + " Before Smoothing")
     if len(greyArea) > 0:
@@ -90,6 +97,8 @@ for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothin
 
     axsErrors[0].set_title("XY Position Error")
     axsErrors[0].set_ylabel("Error [m]")
+    axsErrors[3].plot(estimatesBeforeSmoothing.times, gts.positions[matchesBeforeSmoothing, 1] - estimatesBeforeSmoothing.positions[:, 1], color="C"+str(i), label=labels[i] + "Before Smoothing")
+    axsErrors[2].plot(estimatesBeforeSmoothing.times, gts.positions[matchesBeforeSmoothing, 0] - estimatesBeforeSmoothing.positions[:, 0],color="C"+str(i), label=labels[i] + "Before Smoothing")
     axsErrors[1].plot(gts.times[matchesBeforeSmoothing], func(np.rad2deg(estimatesBeforeSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesBeforeSmoothing, -1])), color="C"+str(i), label=labels[i] + " Before Smoothing")
     if len(greyArea) > 0:
         axsErrors[1].axvspan(greyArea[0], greyArea[1], facecolor='grey', alpha=0.3)
@@ -101,8 +110,17 @@ for i, (estimatesBeforeSmoothing, estimatesAfterSmoothing, matchesBeforeSmoothin
     # After smoothing
     axsErrors[0].plot(gts.times[matchesAfterSmoothing], np.linalg.norm(estimatesAfterSmoothing.positions - gts.positions[matchesAfterSmoothing], ord=2, axis=1), linestyle="dashed", color="C"+str(i), label=labels[i] + " After Smoothing")
     axsErrors[1].plot(gts.times[matchesAfterSmoothing], func(np.rad2deg(estimatesAfterSmoothing.orientations[:, -1]), np.rad2deg(gts.orientations[matchesAfterSmoothing, -1])), linestyle="dashed", color="C"+str(i), label=labels[i] + " After Smoothing")
+    axsErrors[3].plot(gts.times[matchesAfterSmoothing], gts.positions[matchesAfterSmoothing, 1] - estimatesAfterSmoothing.positions[:, 1], color="C"+str(i), label=labels[i] + "After Smoothing", linestyle="dashed")
+    axsErrors[2].plot(estimatesAfterSmoothing.times, gts.positions[matchesAfterSmoothing, 0] - estimatesAfterSmoothing.positions[:, 0], color="C"+str(i), label=labels[i] + "After Smoothing", linestyle="dashed")
     axsErrors[0].legend()
     axsErrors[1].legend()
+    axsErrors[2].legend()
+    axsErrors[3].legend()
+
+    axsErrors[2].set_title("X Position Error")
+    axsErrors[2].set_ylabel("Error [m]")
+    axsErrors[3].set_title("Y Position Error")
+    axsErrors[3].set_ylabel("Error [m]")
 
     plt.xlabel("Time [s]")
 
@@ -233,11 +251,11 @@ saveConfig = {
     }
 
 figErrors.savefig(
-    figfolder + "/SensorComparison_AbsoluteErrors.pdf", 
+    figfolder + f"/{experiment}_AbsoluteErrors.pdf", 
     **saveConfig
 )
 figNees.savefig(
-    figfolder + "/SensorComparison_PlanarNeeses.pdf", 
+    figfolder + f"/{experiment}_PlanarNeeses.pdf", 
     **saveConfig
     )
 NsBS = [arr.positions.shape[0] for arr in estimatesBS]

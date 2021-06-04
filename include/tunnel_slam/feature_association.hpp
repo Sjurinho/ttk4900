@@ -24,7 +24,9 @@ class FeatureAssociation
 
         float leafSize = 0.2;
         float normalRadius = leafSize*2.5;
-        int minNrOfFeatures=30;
+        int minNrOfFeatures=100;
+        double sigma2_x, sigma2_y, sigma2_z = 0;
+        double sigma_yaw, sigma_pitch, sigma_roll;
 
         // ROS Members
         ros::NodeHandle nh_; // Defining the ros NodeHandle variable for registrating the same with the master
@@ -55,7 +57,6 @@ class FeatureAssociation
         void _publish(const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud);
 
         //Transformation calculations
-        void _warpPoints(); // #TODO
         void _calculateTransformation(const pcl::PointCloud<pcl::PointNormal> &groundPlaneCloud, const pcl::PointCloud<pcl::PointNormal> &featureCloud, const pcl::PointCloud<pcl::FPFHSignature33> &featureDescriptors);
 
         void _publishTransformation();

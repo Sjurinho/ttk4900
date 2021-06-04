@@ -50,9 +50,9 @@ void matrix_square_root( const cv::Mat& A, cv::Mat& sqrtA ) {
 
 boost::shared_ptr<gtsam::PreintegratedCombinedMeasurements::Params> imuParams() {
   // We use the sensor specs to build the noise model for the IMU factor.
-  double accel_noise_sigma = 0.05;//0.0003924;
-  double gyro_noise_sigma = 3e-5;//1e-4;//8e-05;
-  double accel_bias_rw_sigma = 0.005;//0.001;//0.02;
+  double accel_noise_sigma = 0.03;//0.01;//0.0003924;
+  double gyro_noise_sigma = 3e-4;//3e-5//1e-4;//8e-05;
+  double accel_bias_rw_sigma = 0.01;//0.005;//0.001;//0.02;
   double gyro_bias_rw_sigma = 0.0003;//0.001;//0.00002;//0.0001454441043;
   /*double accel_noise_sigma = 0.07;//0.0003924;
   double gyro_noise_sigma = 5e-3;//1e-4;//8e-05;
@@ -93,11 +93,11 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     ROS_INFO("Initializing Graph Node");
 
     //Subscribers and publishers
-    subOdometry = nh.subscribe<nav_msgs::Odometry>("/lidarOdom", 32, &Graph::odometryHandler, this);
-    subMap = nh.subscribe<sensor_msgs::PointCloud2>("/featurePointCloud", 32, &Graph::mapHandler, this);
-    subGroundPlane = nh.subscribe<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 32, &Graph::groundPlaneHandler, this);
-    subImu = nh.subscribe<sensor_msgs::Imu>("/imu", 32, &Graph::imuHandler, this);
-    subGnss = nh.subscribe<geometry_msgs::PoseStamped>("/gnss", 32, &Graph::gnssHandler, this);
+    subOdometry = nh.subscribe<nav_msgs::Odometry>("/lidarOdom", 1000, &Graph::odometryHandler, this);
+    subMap = nh.subscribe<sensor_msgs::PointCloud2>("/featurePointCloud", 1000, &Graph::mapHandler, this);
+    subGroundPlane = nh.subscribe<sensor_msgs::PointCloud2>("/groundPlanePointCloud", 1000, &Graph::groundPlaneHandler, this);
+    subImu = nh.subscribe<sensor_msgs::Imu>("/imu", 1000, &Graph::imuHandler, this);
+    subGnss = nh.subscribe<geometry_msgs::PoseStamped>("/gnss", 1000, &Graph::gnssHandler, this);
     pubTransformedMap = nh.advertise<sensor_msgs::PointCloud2>("/map", 1);
     pubTransformedPose = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/pose", 1);
     pubPoseArray = nh.advertise<geometry_msgs::PoseArray>("/poseArray", 1);
@@ -115,14 +115,15 @@ Graph::Graph(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
 
     gtsam::Vector6 priorSigmas(6);
-    priorSigmas << 0.001, 0.001, 1e-5, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
+    priorSigmas << 0.001, 0.001, 1e-5, 0.05, 0.05, 0.001; // rad, rad, rad, m, m, m
+    //priorSigmas << 0.001, 0.001, 1e-5, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
 
     gtsam::Vector6 odometrySigmas(6);
-    odometrySigmas << 1e-3, 1e-3, 1e-2, 0.3, 0.3, 0.5; // rad, rad, rad, m, m, m
+    odometrySigmas << 1e-3, 1e-3, 1e-2, 0.2, 0.2, 0.3; // rad, rad, rad, m, m, m
     gtsam::Vector3 structureSigmas(3);
     structureSigmas << 0.4, 0.4, 0.2; //m, m, m
     gtsam::Vector3 gnssSigmas(3);
-    gnssSigmas << 2, 2, 0.2;
+    gnssSigmas << 0.8, 0.8, 0.2;
     /*gtsam::Vector6 priorSigmas(6);
     priorSigmas << 1e-3, 1e-3, 1e-3, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
 
@@ -446,16 +447,14 @@ bool Graph::_detectLoopClosure()
 
     std::vector<int> pointSearchIndLoop;
     std::vector<float> pointSearchSqDisLoop;
-    pcl::PointXYZ searchPoint = currentPosPoint;
-    searchPoint.x += 70*std::cos(currentPoseInWorld.rotation().yaw());
-    searchPoint.y += 70*std::sin(currentPoseInWorld.rotation().yaw());
-    std::cout << "Looking for loop closures around: " << searchPoint << std::endl;
+    std::cout << "Vehicle located at: " << currentPosPoint << std::endl;
     kdtreeHistoryKeyPositions->setInputCloud(cloudKeyPositions);
-    kdtreeHistoryKeyPositions->radiusSearch(searchPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
+    kdtreeHistoryKeyPositions->radiusSearch(currentPosPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
     closestHistoryFrameID = -1;
+    // Find closes old frame
     for (int i = 0; i < pointSearchIndLoop.size(); ++i){
         int id = pointSearchIndLoop[i];
-        if (abs(timeKeyPosePairs[id].first - timeOdometry) > historyTimePassed){
+        if (abs(timeKeyPosePairs[id].first - *imuComparisonTimerPtr) > historyTimePassed){
             closestHistoryFrameID = id;
             break;
         }
@@ -463,11 +462,34 @@ bool Graph::_detectLoopClosure()
     if (closestHistoryFrameID == -1){
         return false;
     }
-    latestFrameIDLoopClosure = cloudKeyPositions->points.size()-1; // add -1?
+    // Search based on angle difference
+    gtsam::Pose3 closestPose = timeKeyPosePairs[closestHistoryFrameID].second;
+    double viewDiff = closestPose.rotation().yaw() - currentPoseInWorld.rotation().yaw();
+    if (abs(viewDiff) > (10*M_PI/180)){
+        double searchPointScale = 60*abs(viewDiff)/M_PI;
+        std::cout << "SearchPoint is scaled with: " << searchPointScale << std::endl;
+        pcl::PointXYZ searchPoint = currentPosPoint;
+        searchPoint.x += searchPointScale*std::cos(viewDiff);
+        searchPoint.y += searchPointScale*std::sin(viewDiff);
+        std::cout << "Searching for loop closure around: " << searchPoint << std::endl;
+        kdtreeHistoryKeyPositions->setInputCloud(cloudKeyPositions);
+        kdtreeHistoryKeyPositions->radiusSearch(searchPoint, historyKeyFrameSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
+        closestHistoryFrameID = -1;
+        for (int i = 0; i < pointSearchIndLoop.size(); ++i){
+            int id = pointSearchIndLoop[i];
+            if (abs(timeKeyPosePairs[id].first - *imuComparisonTimerPtr) > historyTimePassed){
+                closestHistoryFrameID = id;
+                break;
+            }
+        }
+        if (closestHistoryFrameID == -1){
+            return false;
+        }
+    }
+    latestFrameIDLoopClosure = cloudKeyPositions->points.size()-1; 
     gtsam::Pose3 latestFramePose;
     _fromPointXYZRPYToPose3(cloudKeyPoses->points[latestFrameIDLoopClosure],latestFramePose);
     pcl::transformPointCloud(*cloudKeyFrames[latestFrameIDLoopClosure], *latestKeyFrameCloud, latestFramePose.matrix());
-    std::cout << "latest frame pose: " << latestFramePose << std::endl;
     for (int j = -historyKeyFrameSearchNum; j <= historyKeyFrameSearchNum; ++j){
         if (closestHistoryFrameID + j < 0 || closestHistoryFrameID + j > latestFrameIDLoopClosure)
             continue;
@@ -506,10 +528,10 @@ bool Graph::_performLoopClosure()
     pcl::IterativeClosestPoint<pointT, pointT> icp;
     icp.setMaxCorrespondenceDistance(100);
     //icp.setUseReciprocalCorrespondences(true);
-    icp.setMaximumIterations(200);
-    icp.setTransformationEpsilon(1e-6);
-    icp.setEuclideanFitnessEpsilon(1e-6);
-    icp.setRANSACIterations(100);
+    icp.setMaximumIterations(1000);
+    icp.setTransformationEpsilon(1e-10);
+    icp.setEuclideanFitnessEpsilon(1e-10);
+    icp.setRANSACIterations(500);
     // Align clouds
     icp.setInputSource(latestKeyFrameCloud);
     icp.setInputTarget(nearHistoryKeyFrameCloud);
@@ -582,11 +604,14 @@ void Graph::odometryHandler(const nav_msgs::OdometryConstPtr &odomMsg)
     gtsam::Point3 pos(odomMsg->pose.pose.position.x, odomMsg->pose.pose.position.y, odomMsg->pose.pose.position.z);
     gtsam::Rot3 rot = gtsam::Rot3::Quaternion(odomMsg->pose.pose.orientation.w, odomMsg->pose.pose.orientation.x, odomMsg->pose.pose.orientation.y, odomMsg->pose.pose.orientation.z);
     gtsam::Pose3 pose(rot, pos);
-
+    gtsam::Vector6 odomSigmas;
+    odomSigmas << odomMsg->pose.covariance.at(17), odomMsg->pose.covariance.at(23), odomMsg->pose.covariance.at(29), odomMsg->pose.covariance.at(0), odomMsg->pose.covariance.at(5), odomMsg->pose.covariance.at(11);
     mtx.lock();
+    odometryNoise = gtsam::noiseModel::Diagonal::Variances(odomSigmas);
     odometryMeasurements.push_back(std::pair<double, gtsam::Pose3>(time, pose));
     timeOdometry = time;
     displacement = pose;
+    //std::cout << "ODOMETRYNOISE\n" << odometryNoise->covariance() << std::endl;
     //std::cout << "Displacement" << displacement << std::endl;
     //std::cout << "NEW ODOMETRY" << std::endl;
     imuComparisonTimerPtr = &timeOdometry;
@@ -649,46 +674,53 @@ void Graph::_cloud2Map(){
     pcl::registration::CorrespondenceEstimation<pointT, pointT> matcher;
     pcl::CorrespondencesPtr partialOverlapCorrespondences(new pcl::Correspondences);
     pcl::registration::CorrespondenceRejectorTrimmed trimmer;
+
     trimmer.setInputCorrespondences(allCorrespondences);
     trimmer.setOverlapRatio(0.4);
     matcher.setInputTarget(cloudMapRefined);
     pcl::PointCloud<pointT> framePoints = *currentFeatureCloud;
     pcl::PointCloud<pointT> frameInWorld;
+
+    double x_dist, y_dist, z_dist = 0;
+
     int iter = 0;
     double lambda = 1e-4;
     for (iter = 0; iter<maxIterSmoothing; iter++){
-
         pcl::transformPointCloud(framePoints, frameInWorld, currentPoseInWorld.matrix());
         matcher.setInputSource(frameInWorld.makeShared());
         matcher.determineReciprocalCorrespondences(*allCorrespondences); 
         trimmer.getCorrespondences(*partialOverlapCorrespondences);
-
         int nPoints = partialOverlapCorrespondences->size();
-        //std::cout << "Correspondences map alignment: " << nPoints << std::endl;
-        if (nPoints < 10)
+
+        if (nPoints < 10) {
+            //alignmentNoise << 1e-3, 1e-3, 1e-2, 0.2, 0.2, 0.3;
             break;
-        int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
-        int ARows = nPoints*pointD + priorD;
-        int BRows = ARows;
-        int ACols = poseD;// + pointD*nPoints;
-        int XCols = ACols;
+        }
+
         std::vector<gtsam::Point3> worldPoints; 
         worldPoints.reserve(nPoints);
         std::vector<gtsam::Point3> localPoints; 
         localPoints.reserve(nPoints); //reserve space
         worldPoints.clear(); localPoints.clear();
+
+        // Alignment matrices for Levenberg Marquardt
+        int pointD = 3; int poseD = 6; int priorD = updateImu ? 6:0;
+        int ARows = nPoints*pointD + priorD;
+        int BRows = ARows;
+        int ACols = poseD;// + pointD*nPoints;
+        int XCols = ACols;
         cv::Mat matA = cv::Mat::zeros(ARows, ACols, CV_64FC1);
         cv::Mat matAt(ACols, ARows, CV_64FC1, cv::Scalar::all(0.0));
         cv::Mat matAtA(ACols, ACols, CV_64FC1, cv::Scalar::all(0));
         cv::Mat matB(BRows, 1, CV_64FC1, cv::Scalar::all(0));
         cv::Mat matAtB(ACols, 1, CV_64FC1, cv::Scalar::all(0));
         cv::Mat matX(XCols, 1, CV_64FC1, cv::Scalar::all(0));
-
         auto R_wLi = currentPoseInWorld.rotation();
         auto t_wi  = currentPoseInWorld.translation();
         for (int j = 0; j < nPoints; j++){
             int sourceIndex = partialOverlapCorrespondences->at(j).index_query;
             int targetIndex = partialOverlapCorrespondences->at(j).index_match;
+            double weight = partialOverlapCorrespondences->at(j).weight;
             pointT pointInWorld = frameInWorld.at(sourceIndex);
             pointT pointInLocalFrame = framePoints.at(sourceIndex);
             pointT matchedPointMap = cloudMapRefined->at(targetIndex);
@@ -714,9 +746,6 @@ void Graph::_cloud2Map(){
             J_hij_TwLi.at<double>(2, 3) = R_wLi.matrix()(2, 0);
             J_hij_TwLi.at<double>(2, 4) = R_wLi.matrix()(2, 1);
             J_hij_TwLi.at<double>(2, 5) = R_wLi.matrix()(2, 2);
-            /*J_hij_TwLi.at<double>(0, 0) = 1;
-            J_hij_TwLi.at<double>(1, 1) = 1;
-            J_hij_TwLi.at<double>(2, 2) = 1;*/
             J_hij_TwLi.at<double>(0, 0) = tmp(0, 0);
             J_hij_TwLi.at<double>(0, 1) = tmp(0, 1);
             J_hij_TwLi.at<double>(0, 2) = tmp(0, 2);
@@ -727,18 +756,8 @@ void Graph::_cloud2Map(){
             J_hij_TwLi.at<double>(2, 1) = tmp(2, 1);
             J_hij_TwLi.at<double>(2, 2) = tmp(2, 2);
 
-            /*auto J_hij_xwj = cv::Mat(pointD, pointD, CV_64F, cv::Scalar::all(0));
-            J_hij_xwj.at<double>(0, 0) = R_wLi.matrix()(0, 0);
-            J_hij_xwj.at<double>(0, 1) = R_wLi.matrix()(0, 1);
-            J_hij_xwj.at<double>(0, 2) = R_wLi.matrix()(0, 2);
-            J_hij_xwj.at<double>(1, 0) = R_wLi.matrix()(1, 0);
-            J_hij_xwj.at<double>(1, 1) = R_wLi.matrix()(1, 1);
-            J_hij_xwj.at<double>(1, 2) = R_wLi.matrix()(1, 2);
-            J_hij_xwj.at<double>(2, 0) = R_wLi.matrix()(2, 0);
-            J_hij_xwj.at<double>(2, 1) = R_wLi.matrix()(2, 1);
-            J_hij_xwj.at<double>(2, 2) = R_wLi.matrix()(2, 2);*/
-
             auto e = p_wj - q_wj;
+            //std::cout << "p_wj: " << p_wj << " q_wj " << q_wj << std::endl;
             auto b_ij = cv::Mat(pointD,1,CV_64F,cv::Scalar::all(0));
             b_ij.at<double>(0,0) = -e.x();
             b_ij.at<double>(1,0) = -e.y();
@@ -747,30 +766,20 @@ void Graph::_cloud2Map(){
             // Extract submatrice to insert into
             auto ProwRange = cv::Range(pointD*j, pointD*j + pointD);
             auto PcolRange = cv::Range(0, poseD);
-            //auto SrowRange = ProwRange; 
-            //auto ScolRange = cv::Range(poseD + pointD*j, poseD + pointD*j + pointD);
+            
             auto bColRange = cv::Range::all();
             auto bRowRange = cv::Range(j*pointD, j*pointD + pointD);
-            //auto bRowRange = cv::Range(k*nPoints*poseD + j*poseD, k*nPoints*poseD + j*poseD + poseD);
-
+           
             cv::Mat PsubMatA = matA.rowRange(ProwRange).colRange(PcolRange);
-            //cv::Mat SsubMatA = matA.colRange(ScolRange).rowRange(SrowRange);
             cv::Mat bsubMatB = matB.colRange(bColRange).rowRange(bRowRange);
 
             // Propagate uncertainty
             cv::Mat sigmasPose(6, 6, CV_64F, cv::Scalar::all(0));
-            
             cv::eigen2cv(odometryNoise->covariance(), sigmasPose);
             cv::Mat sigmasPoseFloat;
             sigmasPose.convertTo(sigmasPoseFloat, CV_64F);
 
-            /*cv::Mat sigmasPoints(3, 3, CV_64F, cv::Scalar::all(0));
-            cv::eigen2cv(structureNoise->covariance(), sigmasPoints);
-            cv::Mat sigmasPointsFloat;
-            sigmasPoints.convertTo(sigmasPointsFloat, CV_64F);*/
-
             cv::Mat whitener = J_hij_TwLi * sigmasPoseFloat * J_hij_TwLi.t();
-            //                    + J_hij_xwj * sigmasPoints * J_hij_xwj.t();
             cv::Mat whitenerInv;
             cv::invert(whitener, whitenerInv, cv::DECOMP_SVD);
             cv::Mat whitenerSqrtInv;
@@ -783,8 +792,6 @@ void Graph::_cloud2Map(){
             cv::Mat bi = whitenerSqrtInv * b_ij;
             bi.copyTo(bsubMatB);
 
-            //cv::Mat Si = whitenerSqrtInv * J_hij_xwj;
-            //Si.copyTo(SsubMatA);
         }
         // Add prior if imu data is available
         if (updateImu && imuEnabledFlag){
@@ -837,7 +844,9 @@ void Graph::_cloud2Map(){
             fxBefore += pow(gtsam::norm3(keyPoseBefore * p_Lij - q_wj), 2);
             fxAfter += pow(gtsam::norm3(keyPoseAfter * p_Lij - q_wj), 2);
         }
+        //std::cout << "fxBefore: " << fxBefore << " fxAfter: " << fxAfter << std::endl;
         if (fxAfter < fxBefore){
+            //std::cout << "GOOD STEP" << std::endl;
             currentPoseInWorld = keyPoseAfter;
             lambda /= 10;
             fxResult = fxAfter;
@@ -847,11 +856,12 @@ void Graph::_cloud2Map(){
             lambda *= 10;
             fxResult = fxBefore;
         }
-
         if (fxResult < fxTol || cv::norm(matX) < stepTol) {
             break;
         }
     }
+    //std::cout << x_dist << ", " << y_dist << std::endl;
+    //std::cout << alignmentNoise;
     std::cout << "Cloud 2 map alignment iterations: " << iter << std::endl;
 }
 
@@ -914,7 +924,7 @@ void Graph::runOnce(int &runsWithoutUpdate)
         }
         mtx.unlock();
     }
-    else if (imuMeasurements.size() > 0 && *imuComparisonTimerPtr + 1.7 < imuMeasurements.back().first || onlyImu){
+    else if (imuMeasurements.size() > 0 && *imuComparisonTimerPtr + 2 < imuMeasurements.back().first || onlyImu){
         mtx.lock();
         reinitialize=true;
         onlyImu=true;
@@ -952,6 +962,7 @@ void Graph::runOnce(int &runsWithoutUpdate)
 
             currentPoseInWorld = isamCurrentEstimate.at<gtsam::Pose3>(X(index));
             cloudKeyPositions->push_back(pcl::PointXYZ(currentPoseInWorld.x(), currentPoseInWorld.y(), currentPoseInWorld.z()));
+            timeKeyPosePairs.push_back(std::pair<double, gtsam::Pose3>(*imuComparisonTimerPtr, currentPoseInWorld));
             _fromPose3ToPointXYZRPY(currentPoseInWorld, currentPose);
             cloudKeyPoses->push_back(currentPose);
 
@@ -1056,17 +1067,8 @@ void Graph::_preProcessIMU(){
 
 void Graph::_postProcessIMU(){
     if(updateImu){
-
         predImuState = preintegrated->predict(prevImuState, prevImuBias);
 
-        //currentPosPoint = pcl::PointXYZ(predImuState.pose().x(), predImuState.pose().y(), predImuState.pose().z());
-        /*
-        Lowpassfilter trial
-        auto currentPoseOnManifold = gtsam::Pose3::Logmap(currentPoseInWorld);
-        auto predImuStateOnManifold = gtsam::Pose3::Logmap(predImuState.pose());
-        currentPoseInWorld = gtsam::Pose3::Expmap(currentPoseOnManifold + 0.3*(-currentPoseOnManifold + predImuStateOnManifold));
-        */
-       //currentPoseInWorld = predImuState.pose();
     }
 }
 

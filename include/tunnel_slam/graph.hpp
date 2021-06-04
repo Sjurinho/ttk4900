@@ -84,27 +84,25 @@ class Graph
 
         // Optimization parameters
         bool smoothingEnabledFlag=true, imuEnabledFlag=true, gnssEnabledFlag=true, loopClosureEnabledFlag=true;
-        double voxelRes = 0.05;
+        double voxelRes = 0.03;
         double keyFrameSaveDistance = 3;
         double minCorresponendencesStructure = 30;
         int cloudsInQueue = 0;
 
-        int historyKeyFrameSearchRadius = 100;
+        int historyKeyFrameSearchRadius = 30;
         int closestHistoryFrameID = -1;
         int latestFrameIDLoopClosure = 0;
-        int historyKeyFrameSearchNum = 4;
+        int historyKeyFrameSearchNum = 10;
         int historyTimePassed = 30;
-        float historyKeyframeFitnessScore = 1; // the smaller the better alignment
+        float historyKeyframeFitnessScore = 0.6; // the smaller the better alignment
         bool aLoopIsClosed = false;
         bool potentialLoopFlag = false;
 
-        int maxIterSmoothing = 100;
+        int maxIterSmoothing = 30;
         float fxTol = 0.05;
-        double stepTol = 1e-6;
+        double stepTol = 1e-8;
         double delayTol = 1;
-        
-        int stableMapCounter=4;
-        int stabilityCriterion=4;
+
         double* imuComparisonTimerPtr;
 
         bool imuInitialized=false, newKeyPose = false;
@@ -118,6 +116,8 @@ class Graph
         gtsam::ISAM2 *isam;
 
         gtsam::noiseModel::Diagonal::shared_ptr priorNoise, odometryNoise, constraintNoise, structureNoise, gnssNoise, loopClosureNoise;
+
+        gtsam::Vector6 alignmentNoise;
 
         gtsam::noiseModel::Isotropic::shared_ptr imuVelocityNoise, imuBiasNoise;
 
