@@ -37,6 +37,8 @@ simple_tunnel_ds.Thetagt = truck_Thetagt;
 simple_tunnel_ds.imu = imu;
 simple_tunnel_ds.sensorSpecs = sensorSpecs;
 simple_tunnel_ds.Description = descstring;
-simple_tunnel_ds.gnss = addGNSS(simple_tunnel_ds, 30, 220, 1.5);
+simple_tunnel_ds.gnss = addGNSS(simple_tunnel_ds, 20, 220, 1.5);
+simple_tunnel_ds.linear_acc = out.linear_acc;
+simple_tunnel_ds.angular_rate = out.angular_velocity;
 
 save('datasets/SimpleTunnel_ds.mat', 'simple_tunnel_ds', '-v7.3');

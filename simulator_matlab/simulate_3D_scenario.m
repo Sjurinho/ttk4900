@@ -26,13 +26,13 @@ end
 numPoses = size(refPath, 1);
 
 refDirections  = ones(numPoses,1);   % Forward-only motion
-numSmoothPoses = 50 * numPoses;       % Increase this to increase the number of returned poses
-refVelocities  = 6 * ones(numPoses,1);
+numSmoothPoses = 50 * numPoses;      % Increase this to increase the number of returned poses
+refVelocities  = 1.5 * ones(numPoses,1);
 
 setImuParameters;
 setLidarParameters;
 
-T = 240;
+T = 1000;
 plotWaypoints(scenario, refPath);
 
 modelName = 'sim3d';

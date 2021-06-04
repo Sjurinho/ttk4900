@@ -302,7 +302,10 @@ data/*
 __pycache__/
 
 # MATLAB
-simulator_matlab/datasets/
+simulator_matlab/datasets/**
+!simulator_matlab/datasets/simulated_imu.fig
+!simulator_matlab/datasets/simulated_imu.eps
+
 simulator_matlab/*.mat
 simulator_matlab/slprj/
 simulator_matlab/deprecated/
