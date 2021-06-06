@@ -1,0 +1,22 @@
+gtsam::Vector6 priorSigmas(6);
+priorSigmas << 0.001, 0.001, 1e-5, 0.3, 0.3, 0.001; // rad, rad, rad, m, m, m
+
+gtsam::Vector6 odometrySigmas(6);
+odometrySigmas << 1e-3, 1e-3, 1e-2, 0.2, 0.2, 0.3; // rad, rad, rad, m, m, m
+gtsam::Vector3 structureSigmas(3);
+structureSigmas << 0.4, 0.4, 0.2; //m, m, m
+gtsam::Vector3 gnssSigmas(3);
+gnssSigmas << 2, 2, 0.2;
+
+double accel_noise_sigma = 0.05;//0.0003924;
+double gyro_noise_sigma = 3e-5;//1e-4;//8e-05;
+double accel_bias_rw_sigma = 0.005;//0.001;//0.02;
+double gyro_bias_rw_sigma = 0.0003
+
+Tunnel entry/exit:
+
+Enters: #4
+Leaves: #63
+
+Reenters: #106
+Leaves: #174

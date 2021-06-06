@@ -5,6 +5,7 @@ import scipy.io as sio
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
+from scipy import spatial
 
 import rospy
 import rosbag
@@ -433,18 +434,32 @@ def plotIMUvsRealLinAcc(filename:str):
 
 def main():
     #filepath = "../data/recorded_runs/python_plots/Saved/test/lidar/"
-    #filepath = "../data/recorded_runs/python_plots/Saved/newestSensorComparisons/lidar+imu+gnss/"
-    filepath = "../data/"
+    filepath = "../data/recorded_runs/python_plots/Saved/singleLoopWithLoopClosure/11/"
+    #filepath = "../data/"
     matfile = "../data/april_2021/SimpleTunnel_BigLoop_ds.mat"
     imfile = "../simulator_matlab/straightTunnel_long.png"
     #estimates, gts = bag2numpy(f'simpleTunnel_big_loopClosure.bag')
-    estimates, gts = bag2numpy(f'rawEstimates.bag')
+    estimates, gts = bag2numpy(f'{filepath}rawEstimates.bag')
     estimatesAfterSmoothing, velocities, landmarks, biases = csv2numpy(f"{filepath}LatestRun.csv", estimates)
     #run2TunnelStart = estimates.times[108]
     #run2TunnelEnd = estimates.times[175]
     #run1TunnelEnd = estimates.times[64]
     #run1TunnelStart = estimates.times[4]
     #greyArea = [run1TunnelStart, run1TunnelEnd, run2TunnelStart, run2TunnelEnd]
+    tree = spatial.KDTree(gts.positions)
+    distances = np.array([])
+    prev_neighbor = 0
+    for point in estimatesAfterSmoothing.positions:
+        dist_neighbor = tree.query(point, k=10)
+        neighbors = dist_neighbor[1]
+        dists = dist_neighbor[0]
+        neighbor = np.argmax(neighbors > prev_neighbor)
+        prev_neighbor= neighbors[neighbor]
+        print(prev_neighbor)
+        dist = dists[0]
+        distances = np.concatenate((distances, [dist]))
+    print(np.mean(distances))
+    print(np.std(distances))
     greyArea=[]
     SmoothingEstVsGt = plotTrajectory2D(estimates, estimatesAfterSmoothing, gts, skipPlt=2, ylim=[-50, 50], xlim=[-10, 350], title="Estimated Position Vs True Position")
     #afterSmoothingEstVsGt = plotTrajectory2D(estimatesAfterSmoothing, gts, skipPlt=2, xlim=[-50, 50], ylim=[-10, 350], title="After Smoothing")
